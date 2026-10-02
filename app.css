@@ -419,3 +419,10 @@ em.dl.up{color:var(--good)} em.dl.dn{color:var(--bad)}
 .seg{display:flex;gap:2px}
 .seg button{flex:1;border:0;background:none;font-size:13px;font-weight:500}
 .adm-seg{flex:0 0 auto}
+.hnote{font-size:11.5px;color:var(--ink3);margin-top:4px}
+.hero.on .hnote{display:none}
+.h3t{display:flex;align-items:center;gap:8px}
+.gcal{font-size:11px;font-weight:500;color:var(--ink3);background:var(--line2);border-radius:999px;padding:2px 9px}
+.dl-act.auto{opacity:.85}
+.dl-key i.k-plan{background:transparent;border:1px dashed var(--ink3)}
+.dl-key i.k-act{background:var(--ink2);height:6px;margin-bottom:2px}

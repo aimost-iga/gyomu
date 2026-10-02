@@ -44,7 +44,9 @@ function tick() {
 function testPush() { const u = { email: OWNER_MAIL, name: '代表' }; log_('試しのお知らせ：' + send_(u, '試しのお知らせ', 'これが見えていればスマホのお知らせは届いています。', 'test')); }
 
 function tick_(now) {
-  // 代表がアプリの「設定」で「動かす」にするまでは、お知らせもカレンダー反映もしない
+  // カレンダーの読み取りは、お知らせのオン・オフに関係なくいつも行う（分析のため）
+  try { readCals_(now); } catch (e) { log_('カレンダー読み取りの失敗：' + e.message); }
+  // 代表がアプリの「設定」で「動かす」にするまでは、お知らせはしない
   const appCfg = getDoc_('cfg/app') || {};
   if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
@@ -56,7 +58,6 @@ function tick_(now) {
   const days = {}, ydays = {};
   users.forEach(u => { const k = ukey_(u.email); days[u.email] = getDoc_('day/' + today + '_' + k); ydays[u.email] = getDoc_('day/' + yday + '_' + k); });
 
-  try { syncCal_(today, now, users, days, P, props); } catch (e) { log_('カレンダー反映の失敗：' + e.message); }
 
   const quiet = hhmm >= NT.quietFrom || hhmm < NT.quietTo;
   const counts = {};
@@ -67,15 +68,11 @@ function tick_(now) {
     const plans = Object.keys(d.plan || {}).map(id => Object.assign({ id }, d.plan[id]));
     const ses = Object.keys(d.ses || {}).map(id => Object.assign({ id }, d.ses[id]));
     const running = ses.find(s => !s.en);
-    const active = plans.length || ses.length;
+    const calEv = (d.cal && d.cal.ev) || [];
+    const active = plans.length || ses.length || calEv.length;
     const due = [];
-    if (!d.off) {
-      if (hhmm >= NT.plan && !active) due.push(['plan', '今日の予定がまだです', 'アプリを開いて、今日やることを申告してください。休みなら「今日は休み」を押せばお知らせは止まります。']);
-      plans.forEach(p => {
-        const st = at_(today, p.s), en = at_(today, p.e); if (!st || !en || d.sub) return;
-        if (now.getTime() >= st.getTime() + NT.lateStart * 60000 && now < en && !running && !ses.some(s => s.pid === p.id))
-          due.push(['start_' + p.id, `${p.s}からの${KIND_J[p.k] || ''}、開始がまだです`, `始めているなら「開始」を押してください。予定が変わったら「予定を直す」から。`]);
-      });
+    if (!d.off && !(d.cal && d.cal.off)) {
+      if (hhmm >= NT.plan && !active) due.push(['plan', '今日の予定が入っていません', 'Googleカレンダーに今日の予定を入れてください。休みならカレンダーに終日の「休み」を入れるか、アプリで「今日は休み」を押せばお知らせは止まります。']);
       if (running) {
         const p = running.pid && d.plan && d.plan[running.pid];
         const en = p ? at_(today, p.e) : null;
@@ -85,7 +82,7 @@ function tick_(now) {
       if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', '振り返りをひとこと書いて提出してください。1分で終わります。']);
     }
     const y = ydays[u.email];
-    if (y && !y.off && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
+    if (y && !y.off && !(y.cal && y.cal.off) && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length || (y.v && y.v.doors)) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
       due.push(['yrep', '昨日の日報がまだです', 'アプリを開くと一番上に出ています。ひとことで出せます。']);
 
     due.forEach(([kind, title, body]) => {
@@ -219,7 +216,60 @@ function weekly_(u, today) {
   mail_(u, '先週の振り返り', html);
 }
 
-// ---------- Googleカレンダー ----------
+// ---------- Googleカレンダーの読み取り ----------
+// 各自が代表に共有したカレンダーを読み、その日の予定を day/<日付>_<人> の cal に書く。
+// 名簿で「仕事用カレンダー」を指定した人はそれを、なければ本人のメールのカレンダーを読む。
+const CAL_KIND = [['door', /訪販|訪問|ドア|ローラー/], ['call', /反響|架電|電話|コール|テレ/], ['post', /配布|ポスティング|ポスト|チラシ/], ['apo', /アポ|商談|面談|訪問予約/]];
+const OFF_RE = /休み|休暇|有給|公休|休日|OFF|オフ/i;
+function calKind_(t) { for (const [k, re] of CAL_KIND) if (re.test(t)) return k; return 'other'; }
+function readCals_(now) {
+  const users = people_();
+  const P = PropertiesService.getScriptProperties();
+  const stat = {};
+  users.forEach(u => {
+    if (u.nt === false) return;
+    const uk = ukey_(u.email); const id = (u.cal || u.email).trim();
+    let cal = null;
+    try { cal = CalendarApp.getCalendarById(id); if (!cal) { try { cal = CalendarApp.subscribeToCalendar(id, { hidden: true, selected: false }); } catch (e) {} } } catch (e) { cal = null; }
+    if (!cal) { stat[uk] = { ok: false, at: now.getTime() }; return; }
+    stat[uk] = { ok: true, at: now.getTime(), id: id };
+    // 初回だけ過去31日分、あとは昨日と今日（予定の書き換えに追いつくため）
+    const doneKey = 'calback_' + uk;
+    const back = P.getProperty(doneKey) ? 1 : 31;
+    for (let i = back; i >= 0; i--) {
+      const day = new Date(now.getTime() - i * 86400000);
+      try { writeCalDay_(cal, u, uk, ymdJst_(day)); } catch (e) { log_('カレンダーを書けなかった：' + u.email + ' ' + e.message); }
+    }
+    if (back > 1) P.setProperty(doneKey, '1');
+  });
+  // 共有できているかどうか（管理画面に出す）
+  const f = {}; Object.keys(stat).forEach(k => { f[k] = { mapValue: { fields: { ok: { booleanValue: stat[k].ok }, at: { integerValue: String(stat[k].at) } } } }; });
+  if (Object.keys(f).length) fsFetch_(FS + '/cfg/calstat', { method: 'patch', payload: JSON.stringify({ fields: f }) });
+}
+function writeCalDay_(cal, u, uk, day) {
+  const st = dateOf_(day), en = new Date(st.getTime() + 86400000);
+  const evs = cal.getEvents(st, en);
+  const list = []; let off = false;
+  evs.forEach(e => {
+    const t = String(e.getTitle() || '').slice(0, 40);
+    if (e.isAllDayEvent()) { if (OFF_RE.test(t)) off = true; return; }
+    const a = e.getStartTime(), b = e.getEndTime();
+    const s = a < st ? '00:00' : Utilities.formatDate(a, 'Asia/Tokyo', 'HH:mm');
+    const z = b > en ? '24:00' : Utilities.formatDate(b, 'Asia/Tokyo', 'HH:mm');
+    if (s === z) return;
+    list.push({ s, e: z, t, k: calKind_(t) });
+  });
+  list.sort((x, y) => x.s < y.s ? -1 : 1);
+  const sig = JSON.stringify([list, off]);
+  const P = PropertiesService.getScriptProperties(); const key = 'calsig_' + day + '_' + uk;
+  if (P.getProperty(key) === sig) return;
+  const evF = list.slice(0, 40).map(x => ({ mapValue: { fields: { s: { stringValue: x.s }, e: { stringValue: x.e }, t: { stringValue: x.t }, k: { stringValue: x.k } } } }));
+  const body = { fields: { u: { stringValue: u.email }, d: { stringValue: day }, cal: { mapValue: { fields: { ev: { arrayValue: { values: evF } }, off: { booleanValue: off }, at: { integerValue: String(Date.now()) } } } } } };
+  fsFetch_(FS + '/day/' + day + '_' + uk + '?updateMask.fieldPaths=u&updateMask.fieldPaths=d&updateMask.fieldPaths=cal', { method: 'patch', payload: JSON.stringify(body) });
+  P.setProperty(key, sig);
+}
+
+// ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------
 function cal_() {
   const c = CalendarApp.getCalendarsByName(CAL_NAME)[0];
   return c || CalendarApp.createCalendar(CAL_NAME, { color: CalendarApp.Color.BLUE, summary: '業務管理アプリで申告した予定（自動で入ります。ここで直してもアプリには戻りません）' });
@@ -278,7 +328,7 @@ function cleanup_(P, props, today) {
   if (props.n_cleaned === today) return;
   const lim = ymdJst_(new Date(dateOf_(today).getTime() - 3 * 86400000));
   Object.keys(props).forEach(k => {
-    const m = k.match(/^(?:r|n|ev)_(\d{8})_/);
+    const m = k.match(/^(?:r|n|ev|calsig)_(\d{8})_/);
     if (m && m[1] < lim) { P.deleteProperty(k); delete props[k]; }
   });
   P.setProperty('n_cleaned', today); props.n_cleaned = today;

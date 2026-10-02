@@ -57,6 +57,22 @@ const S = {
 
 // ---------- 数字の計算 ----------
 function actOf(u){ const out = []; for (const d of S.acts) for (const k in d) { const v = d[k]; if (v && v.t && !v.x && v.r && v.u === u) out.push(v); } return out; }
+// 訪問の登録時刻から、訪販で動いていたかたまり（30分以上あいたら区切る）を出す
+function doorBlocks(list){
+  const ts = list.map(x => +x.t).filter(Boolean).sort((a, b) => a - b); const out = []; let st = null, last = null;
+  for (const t of ts) { if (st == null) { st = last = t; continue; } if (t - last > 30 * 60000) { out.push([st, last + 5 * 60000]); st = t; } last = t; }
+  if (st != null) out.push([st, last + 5 * 60000]);
+  return out;
+}
+const CAL_K = { door: 'door', call: 'call', post: 'post', apo: 'other', other: 'other' };
+// 最後に動いた時刻（訪問の登録・開始/終了・反響・配布の記録）
+function lastMove(doc, st){
+  let t = 0;
+  (st.blocks || []).forEach(b => { t = Math.max(t, b[1] - 5 * 60000); });
+  for (const id in ((doc || {}).ses || {})) { const x = doc.ses[id]; t = Math.max(t, x.en || 0); }
+  for (const f of ['han', 'post']) for (const id in ((doc || {})[f] || {})) t = Math.max(t, +doc[f][id].t || 0);
+  return t;
+}
 function visits(list){ const v = { doors: 0, face: 0, got: 0 }; for (const x of list) { v.doors++; if (FACE.includes(x.r)) v.face++; if (x.r === 'got') v.got++; } return v; }
 function statOf(doc, live, u){
   doc = doc || {};
@@ -70,7 +86,14 @@ function statOf(doc, live, u){
     if (!s.en) running = Object.assign({ id }, s);
     if (first == null || s.st < first) first = s.st;
   }
-  const v = live ? visits(actOf(u || doc.u || ME.id)) : Object.assign({ doors: 0, face: 0, got: 0 }, doc.v || {});
+  const al = live ? actOf(u || doc.u || ME.id) : null;
+  const v = live ? visits(al) : Object.assign({ doors: 0, face: 0, got: 0 }, doc.v || {});
+  // 訪販の時間：開始・終了ボタンの時間と、訪問マップの登録時刻から出した時間の、長い方
+  const blocks = live ? doorBlocks(al) : [];
+  const span = live ? blocks.reduce((a, b) => a + b[1] - b[0], 0) : (+(doc.v && doc.v.span) || 0);
+  const doorAuto = span > h.door;
+  if (doorAuto) h.door = span;
+  if (live && blocks.length && (first == null || blocks[0][0] < first)) first = blocks[0][0];
   const han = { call: 0, msg: 0, conn: 0, apo: 0, inv: 0, got: 0 };
   for (const id in (doc.han || {})) { const r = doc.han[id] || {}; for (const [k] of HAN) han[k] += +r[k] || 0; }
   han.all = han.call + han.msg;
@@ -78,10 +101,14 @@ function statOf(doc, live, u){
   for (const id in (doc.post || {})) { const p = doc.post[id] || {}; post += +p.n || 0; postBy[p.ty || '混在'] = (postBy[p.ty || '混在'] || 0) + (+p.n || 0); }
   const got = v.got + han.got;
   const work = h.door + h.call + h.post + h.other;
-  const plan = Object.entries(doc.plan || {}).map(([id, p]) => Object.assign({ id }, p)).sort((a, b) => (toMin(a.s) || 0) - (toMin(b.s) || 0));
+  const own = Object.entries(doc.plan || {}).map(([id, p]) => Object.assign({ id }, p)).sort((a, b) => (toMin(a.s) || 0) - (toMin(b.s) || 0));
+  // カレンダーの予定（共有されたGoogleカレンダーから自動で入る）
+  const cal = ((doc.cal && doc.cal.ev) || []).map((e, i) => ({ id: 'c' + i, k: CAL_K[e.k] || 'other', s: e.s, e: e.e, m: e.t, cal: 1, apo: e.k === 'apo' }));
+  const plan = own.length ? own : cal;
   const ph = { door: 0, call: 0, post: 0, other: 0 };
-  for (const p of plan) { const a = toMin(p.s), b = toMin(p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
-  return { h, work, running, first, v, han, post, postBy, got, plan, ph, off: !!doc.off, sub: doc.sub || 0, has: !!(plan.length || work) };
+  for (const p of plan) { const a = toMin(p.s), b = toMin(p.e === '24:00' ? '23:59' : p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
+  const off = !!doc.off || !!(doc.cal && doc.cal.off && !own.length && !work);
+  return { h, work, running, first, v, han, post, postBy, got, plan, cal, own, ph, blocks, doorAuto, off, sub: doc.sub || 0, has: !!(plan.length || work || v.doors) };
 }
 function targetsOf(st){
   const g = S.goal, out = [];
@@ -101,12 +128,12 @@ function myDays(){
   return m;
 }
 function sumRange(days, from, to, u){
-  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, days: 0, ok: 0, subs: 0, off: 0 };
+  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, plan: 0, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, days: 0, ok: 0, subs: 0, off: 0 };
   for (const d in days) {
     if (d < from || d > to) continue;
     const st = statOf(days[d], d === S.today, u);
     for (const k in t.h) t.h[k] += st.h[k];
-    t.work += st.work; t.doors += st.v.doors; t.face += st.v.face; t.doorGot += st.v.got; t.got += st.got; t.post += st.post;
+    t.plan += Object.values(st.ph).reduce((a, b) => a + b, 0); t.work += st.work; t.doors += st.v.doors; t.face += st.v.face; t.doorGot += st.v.got; t.got += st.got; t.post += st.post;
     t.han += st.han.all; t.call += st.han.call; t.conn += st.han.conn; t.apo += st.han.apo; t.hgot += st.han.got;
     if (st.work || st.v.doors) t.days++; if (st.sub) t.subs++; if (st.off) t.off++;
     if (achieved(targetsOf(st))) t.ok++;
@@ -237,6 +264,7 @@ function watch(){
   S.unsub.push(FB.act.watchDay(S.today, docs => { S.acts = docs || []; rerender(); }));
   S.unsub.push(FB.cfg.watch('goal', d => { S.goal = Object.assign({}, GOAL_DEF, d || {}); rerender(); }));
   S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); }));
+  if (FB.isAdmin()) S.unsub.push(FB.cfg.watch('calstat', d => { S.calstat = d || {}; if (S.tab === 'admin') rerender(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
   loadMine();
 }
@@ -323,11 +351,12 @@ function heroBox(st){
   }
   if (st.off) { add(box, el('div', { class: 'hk', text: '今日は休み（申告済み）' }), el('div', { class: 'hsub', text: 'お知らせは止まっています。しっかり休んでください。' })); return box; }
   if (st.sub) { add(box, el('div', { class: 'hk', text: '日報を提出しました。おつかれさまでした！' }), el('div', { class: 'hsub', text: `今日の合計 ${hm(st.work)}` })); return box; }
-  if (!st.plan.length && !st.work) { add(box, el('div', { class: 'hk', text: 'まず、今日やることを申告しましょう' }), el('div', { class: 'hsub', text: '申告するまで、お知らせが30分ごとに届きます。休みの日は「今日は休み」を。' })); return box; }
+  if (!st.plan.length && !st.work) { add(box, el('div', { class: 'hk', text: '今日の予定がまだ入っていません' }), el('div', { class: 'hsub', text: 'Googleカレンダーに今日の予定を入れると、ここに自動で出ます。休みの日はカレンダーに終日の「休み」を。' })); return box; }
   const next = nextPlan(st);
-  add(box, el('div', { class: 'hk', text: st.work ? `今日の合計 ${hm(st.work)}` : '準備ができたら開始を押しましょう' }),
-    el('div', { class: 'hsub', text: next ? `次の予定：${next.s}〜${next.e} ${KIND[next.k]}${next.m ? '（' + next.m + '）' : ''}` : '予定はすべて終わりました。日報を出しましょう。' }),
-    next ? el('button', { class: 'btn primary big', onclick: () => startWork(next.k, next.id) }, `${KIND[next.k]}を開始する`) : null);
+  add(box, el('div', { class: 'hk', text: st.work ? `今日の稼働 ${hm(st.work)}` : '今日もよろしくお願いします' }),
+    el('div', { class: 'hsub', text: next ? `次の予定：${next.s}〜${next.e} ${next.cal ? next.m : KIND[next.k] + (next.m ? '（' + next.m + '）' : '')}` : '予定はすべて終わりました。日報を出しましょう。' }),
+    next && next.k !== 'other' ? el('button', { class: 'btn primary big', onclick: () => startWork(next.k, next.cal ? null : next.id) }, `${KIND[next.k]}を開始する`) : null,
+    el('div', { class: 'hnote', text: '開始・終了は押さなくても大丈夫です。訪販の時間は訪問マップの登録から自動で出ます。' }));
   return box;
 }
 function nextPlan(st){
@@ -366,20 +395,25 @@ function planEditor(){
   } }, 'この予定で申告する'));
   add(sec, el('div', { class: 'row' },
     el('button', { class: 'btn', onclick: () => { if (confirm('今日は休みとして申告しますか？（今日のお知らせは止まります）')) { S.draft = null; S.editing = false; put(S.today, { off: true }, true); } } }, '今日は休み'),
-    had.length ? el('button', { class: 'btn', onclick: () => { S.draft = null; S.editing = false; render(); } }, 'やめる') : null));
+    el('button', { class: 'btn', onclick: () => { S.draft = null; S.editing = false; render(); } }, 'やめる')));
   return sec;
 }
 function planList(st){
   const ses = Object.values((S.doc && S.doc.ses) || {});
-  const sec = el('section', { class: 'card' }, el('h3', null, '今日の予定', st.sub ? null : el('button', { class: 'link', onclick: () => { S.editing = true; S.draft = null; render(); } }, '予定を直す')));
+  const fromCal = !st.own.length && st.cal.length;
+  const sec = el('section', { class: 'card' }, el('h3', null, el('span', { class: 'h3t' }, '今日の予定', fromCal ? el('span', { class: 'gcal', text: 'Googleカレンダー' }) : null),
+    st.sub || fromCal ? null : el('button', { class: 'link', onclick: () => { S.editing = true; S.draft = null; render(); } }, '予定を直す')));
   for (const p of st.plan) {
     const mine = ses.filter(s => s.pid === p.id), run = mine.find(s => !s.en);
     const used = mine.reduce((a, s) => a + ((s.en || Date.now()) - s.st), 0);
-    add(sec, el('div', { class: 'pitem' + (run ? ' on' : mine.length ? ' done' : '') },
+    const nowM = new Date().getHours() * 60 + new Date().getMinutes();
+    const past = p.cal && toMin(p.e) != null && toMin(p.e) <= nowM;
+    add(sec, el('div', { class: 'pitem' + (run ? ' on' : mine.length || past ? ' done' : '') },
       el('span', { class: 'dot', style: `background:${KC[p.k]}` }),
-      el('div', { class: 'pt' }, el('b', { text: `${p.s}〜${p.e}　${KIND[p.k]}` }),
+      el('div', { class: 'pt' }, el('b', { text: p.cal ? `${p.s}〜${p.e}　${p.m || KIND[p.k]}` : `${p.s}〜${p.e}　${KIND[p.k]}` }),
+        p.cal ? el('small', { class: 'muted', text: p.apo ? 'アポ・商談' : p.k === 'other' ? 'その他の予定' : KIND[p.k] }) :
         (p.m || mine.length) ? el('small', { class: 'muted' }, run ? el('span', { class: 'pst', text: '実行中　' }) : mine.length ? el('span', { class: 'pst', text: `済 ${hm(used)}　` }) : null, p.m || '') : null),
-      !run && !st.sub ? el('button', { class: 'btn', onclick: () => startWork(p.k, p.id) }, mine.length ? '再開' : '開始') : null));
+      !run && !st.sub && !past && p.k !== 'other' ? el('button', { class: 'btn', onclick: () => startWork(p.k, p.cal ? null : p.id) }, mine.length ? '再開' : '開始') : null));
   }
   if (!st.sub && !st.running) add(sec, keepOpen('adhoc', el('details', null, el('summary', { text: '予定にない仕事を開始する' }),
     el('div', { class: 'row', style: 'margin-top:8px' }, KIND_ORDER.map(k => el('button', { class: 'btn', onclick: () => { S.open.adhoc = false; startWork(k); } }, KIND[k]))))));
@@ -468,16 +502,18 @@ function dayline(st){
   const mins = [8 * 60, 20 * 60, nowM];
   plan.forEach(p => { const a = toMin(p.s), b = toMin(p.e); if (a != null) mins.push(a); if (b != null) mins.push(b); });
   ses.forEach(x => { mins.push((x.st - base) / 60000); mins.push(((x.en || Date.now()) - base) / 60000); });
+  (st.blocks || []).forEach(b => { mins.push((b[0] - base) / 60000); mins.push((b[1] - base) / 60000); });
   const from = Math.max(0, Math.floor(Math.min(...mins) / 60) * 60), to = Math.min(24 * 60, Math.ceil(Math.max(...mins) / 60) * 60);
   const span = Math.max(60, to - from); const pos = m => ((m - from) / span * 100).toFixed(2) + '%'; const wid = (a, b) => (Math.max(0, b - a) / span * 100).toFixed(2) + '%';
   const track = el('div', { class: 'dl-track' });
   plan.forEach(p => { const a = toMin(p.s), b = toMin(p.e); if (a == null || b == null) return; add(track, el('i', { class: 'dl-plan', style: `left:${pos(a)};width:${wid(a, b)};--c:${KC[p.k]}`, title: `予定 ${p.s}〜${p.e} ${KIND[p.k]}` })); });
   ses.forEach(x => { const a = (x.st - base) / 60000, b = ((x.en || Date.now()) - base) / 60000; add(track, el('i', { class: 'dl-act' + (x.en ? '' : ' live'), style: `left:${pos(a)};width:${wid(a, b)};--c:${KC[x.k]}`, title: `実際 ${timeOf(x.st)}〜${x.en ? timeOf(x.en) : '今'} ${KIND[x.k]}` })); });
+  (st.blocks || []).forEach(b => { const a = (b[0] - base) / 60000, e = (b[1] - base) / 60000; add(track, el('i', { class: 'dl-act auto', style: `left:${pos(a)};width:${wid(a, e)};--c:${KC.door}`, title: `訪問マップの登録 ${timeOf(b[0])}〜${timeOf(b[1])}` })); });
   if (nowM >= from && nowM <= to) add(track, el('b', { class: 'dl-now', style: `left:${pos(nowM)}` }));
   const ticks = el('div', { class: 'dl-ticks' });
   for (let m = from; m <= to; m += span > 600 ? 120 : 60) add(ticks, el('span', { style: `left:${pos(m)}`, text: String(m / 60) }));
   const planned = Object.values(st.ph).reduce((a, b) => a + b, 0);
-  const legend = el('div', { class: 'dl-leg' }, KIND_ORDER.filter(k => st.ph[k] || st.h[k]).map(k => el('span', null, el('i', { style: `background:${KC[k]}` }), KIND[k])));
+  const legend = el('div', { class: 'dl-leg' }, KIND_ORDER.filter(k => st.ph[k] || st.h[k]).map(k => el('span', null, el('i', { style: `background:${KC[k]}` }), KIND[k])), el('span', { class: 'dl-key' }, el('i', { class: 'k-plan' }), '予定'), el('span', { class: 'dl-key' }, el('i', { class: 'k-act' }), '実際'));
   return el('section', { class: 'dayline', 'aria-label': '今日の予定と実際の時間' },
     el('div', { class: 'dl-head' }, el('div', null, el('small', { text: '稼働' }), el('b', { text: hm(st.work) })), el('div', null, el('small', { text: '予定' }), el('b', { text: planned ? hm(planned) : '—' })),
       el('div', null, el('small', { text: '予定に対して' }), el('b', { text: planned ? Math.round(st.work / planned * 100) + '%' : '—' }))),
@@ -487,10 +523,12 @@ function dayline(st){
 function greet(st){
   const d = toDate(S.today), h = new Date().getHours();
   const hi = h < 11 ? 'おはようございます' : h < 18 ? 'おつかれさまです' : 'おつかれさまでした';
-  const state = st.running ? `${KIND[st.running.k]}中` : st.off ? '休み' : st.sub ? '日報提出済み' : st.work ? '稼働中断中' : st.plan.length ? '開始前' : '予定の申告前';
+  const recent = Date.now() - lastMove(S.doc, st) < 30 * 60000;
+  const state = st.running ? `${KIND[st.running.k]}中` : st.off ? '休み' : st.sub ? '日報提出済み' : recent ? '稼働中' : st.work ? '空き時間' : st.plan.length ? '開始前' : '予定なし';
+  const live = st.running || recent;
   return el('section', { class: 'greet' },
     el('div', { class: 'gdate' }, el('b', { text: `${d.getMonth() + 1}月${d.getDate()}日` }), el('span', { text: `${WEEK[d.getDay()]}曜日` })),
-    el('div', { class: 'ghi' }, `${hi}、${ME.name}さん`, el('span', { class: 'gst' + (st.running ? ' run' : st.sub ? ' ok' : ''), text: state })));
+    el('div', { class: 'ghi' }, `${hi}、${ME.name}さん`, el('span', { class: 'gst' + (live && !st.sub ? ' run' : st.sub ? ' ok' : ''), text: state })));
 }
 // 今日の数字（訪問マップと記録から自動）
 function metrics(st){
@@ -518,17 +556,23 @@ function feedBox(){
 function renderToday(main){
   const st = statOf(S.doc, true);
   add(main, greet(st), pushNotice(), yesterdayBox(), heroBox(st));
-  const editing = S.editing || (!st.off && !st.plan.length && !st.work);
-  if (!st.off && (st.plan.length || st.work)) add(main, dayline(st), metrics(st));
-  if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('button', { class: 'btn', onclick: () => { S.editing = true; put(S.today, { off: false }, true); } }, '休みを取り消して予定を申告する')));
-  else add(main, editing && !st.sub ? planEditor() : planList(st));
+  const editing = S.editing;
+  if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st), metrics(st));
+  if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
+  else if (editing && !st.sub) add(main, planEditor());
+  else if (st.plan.length) add(main, planList(st));
+  else if (!st.sub) add(main, el('section', { class: 'card' }, el('h3', { text: '今日の予定' }),
+    el('div', { class: 'muted', text: 'Googleカレンダーに今日の予定がありません。カレンダーに入れれば自動でここに出ます（10分ほどかかります）。' }),
+    el('div', { class: 'row' }, el('button', { class: 'btn', onclick: () => { S.editing = true; S.draft = null; render(); } }, 'アプリで予定を入れる'),
+      el('button', { class: 'btn', onclick: () => { if (confirm('今日は休みにしますか？（今日のお知らせは止まります）')) put(S.today, { off: true }, true); } }, '今日は休み')),
+    keepOpen('adhoc2', el('details', null, el('summary', { text: '予定なしで仕事を開始する' }), el('div', { class: 'row', style: 'margin-top:8px' }, ['call', 'post', 'other'].map(k => el('button', { class: 'btn', onclick: () => startWork(k) }, KIND[k])))))));
   if (st.off && !editing) return;
   const used = k => st.ph[k] || st.h[k];
   const blocks = [[used('call') || st.han.all || st.han.inv, hanBox(st)], [used('post') || st.post, postBox(st)]];
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
-  if (st.plan.length || st.work) add(main, reportBox(st));
+  if (st.plan.length || st.work || st.v.doors || st.han.all || st.post) add(main, reportBox(st));
 }
 
 // ===== 成績 =====
@@ -608,8 +652,8 @@ function renderStats(main, days){
 }
 
 // ===== チーム =====
-const stateOf = (st, isToday) => !isToday ? '' : st.running ? `${KIND[st.running.k]}中` : st.off ? '休み' : st.sub ? '日報済み' : st.work ? '中断中' : st.plan.length ? '未開始' : '未申告';
-const stCls = s => /中$/.test(s) && s !== '中断中' ? 'run' : s === '未申告' ? 'bad' : s === '未開始' || s === '中断中' ? 'warn' : s === '日報済み' ? 'good' : '';
+const stateOf = (st, isToday, doc) => !isToday ? '' : st.running ? `${KIND[st.running.k]}中` : st.off ? '休み' : st.sub ? '日報済み' : (Date.now() - lastMove(doc, st) < 30 * 60000) ? '稼働中' : st.work ? '空き時間' : st.plan.length ? '開始前' : '予定なし';
+const stCls = s => /中$/.test(s) ? 'run' : s === '予定なし' ? 'bad' : s === '開始前' || s === '空き時間' ? 'warn' : s === '日報済み' ? 'good' : '';
 const PUSH_T = { granted: ['受信中', 'good'], novapid: ['受信中', 'good'], denied: ['切っている', 'bad'], default: ['未設定', 'warn'], needhome: ['ホーム未追加', 'warn'], unsupported: ['メールのみ', ''] };
 function renderTeam(main){
   if (!FB.isStaff()) { go('today'); return; }
@@ -697,20 +741,20 @@ function renderAdmin(main){
   rows.sort((a, b) => b.t.got - a.t.got || b.t.work - a.t.work).forEach(x => {
     const t = x.t, p = prev[x.u] || null;
     const st = today ? statOf(x.days[S.today], true, x.u) : null;
-    const state = st ? stateOf(st, true) : '';
+    const state = st ? stateOf(st, true, x.days[S.today]) : '';
     const pu = (S.pushAll || {})[FB.ukey(x.u)]; const pt = PUSH_T[(pu && pu.perm) || 'default'] || PUSH_T.default;
     const nag = today ? ((S.ntc[FB.ukey(x.u)] || {}).total || 0) : 0;
     const work = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && x.days[d] && (statOf(x.days[d], d === S.today, x.u).work || statOf(x.days[d], d === S.today, x.u).v.doors));
     const need = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && d < S.today && x.days[d] && !x.days[d].off && statOf(x.days[d], false, x.u).has).length;
     const bar = (label, val, show, k, pk) => el('div', { class: 'pb' }, el('span', { text: label }), el('div', { class: 'pb-t' }, el('i', { style: `width:${Math.round((k === 'work' ? t.work : t[k]) / mx(k) * 100)}%` })), el('b', { text: show }), p ? delta(k === 'work' ? t.work : t[k], k === 'work' ? p.work : p[k]) : el('em'));
     add(main, el('section', { class: 'card person' },
-      el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}` })),
-        state ? el('span', { class: 'st ' + (stCls(state) || (state === '予定の申告前' ? 'bad' : '')), text: state }) : null),
+      el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}${t.plan ? `・予定 ${h1(t.plan)}h に対して実際 ${Math.round(t.work / t.plan * 100)}%` : ''}` })),
+        state ? el('span', { class: 'st ' + stCls(state), text: state }) : null),
       el('div', { class: 'pg vol' }, el('h4', { text: '仕事の量' }), bar('稼働', 0, h1(t.work) + 'h', 'work'), bar('訪問', 0, nf(t.doors), 'doors'), bar('反響対応', 0, nf(t.han), 'han'), bar('配布', 0, nf(t.post), 'post')),
       el('div', { class: 'pg res' }, el('h4', { text: '成果' }), bar('獲得', 0, nf(t.got), 'got'), bar('対面', 0, nf(t.face), 'face'), bar('アポ', 0, nf(t.apo), 'apo')),
       el('div', { class: 'pr' }, [['訪問/時', f1(per(t.doors, t.h.door))], ['対面率', t.doors ? Math.round(t.face / t.doors * 100) + '%' : '—'], ['獲得/10時間', f1(t.work > 600000 ? t.got / (t.work / 36000000) : null)], ['1件あたり', t.got ? h1(t.work / t.got) + 'h' : '—']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
       spark(x, r),
-      today ? el('div', { class: 'pf' }, el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
+      today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
   add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), adminGame(), rosterBox());
 }
@@ -790,14 +834,16 @@ function rosterBox(){
     const nm = el('input', { type: 'text', value: u.name || '', 'aria-label': '表示名' });
     const al = el('input', { type: 'text', value: (u.al || []).join('、'), placeholder: '別名（、区切り）', 'aria-label': '別名' });
     const nt = el('input', { type: 'checkbox', checked: u.nt !== false, 'aria-label': 'お知らせ・成績の対象' });
+    const cal = el('input', { type: 'text', value: u.cal || '', placeholder: '空なら本人のGoogleカレンダー', 'aria-label': '読み取るカレンダー' });
     add(sec, el('div', { class: 'pedit' },
       el('div', { class: 'row' }, el('b', { text: u.email, style: 'font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis' }), el('span', { class: 'tag', text: { admin: '管理者', staff: '社員', contractor: '業務委託' }[u.role] || u.role || '社員' })),
       el('div', { class: 'row' }, el('label', { class: 'field', style: 'flex:1' }, '表示名', nm)),
       el('label', { class: 'field' }, '別名', al),
+      el('label', { class: 'field' }, '読み取るカレンダー（仕事用を分けている人だけ、そのカレンダーのIDを入れる）', cal),
       el('div', { class: 'row' }, el('label', { class: 'row', style: 'font-size:13px;flex:1' }, nt, 'お知らせ・成績の対象にする'),
         el('button', { class: 'btn', onclick: async () => {
           const aliases = [...new Set(al.value.split(/[、,，\n]/).map(x => x.trim()).filter(Boolean))];
-          try { await FB.people.save(u.email, { name: nm.value.trim(), al: aliases, nt: nt.checked }); Object.assign(u, { name: nm.value.trim(), al: aliases, nt: nt.checked }); toast(`${nm.value.trim() || u.email}を保存しました`); } catch (e) { toast('保存できませんでした'); }
+          try { await FB.people.save(u.email, { name: nm.value.trim(), al: aliases, nt: nt.checked, cal: cal.value.trim() }); Object.assign(u, { name: nm.value.trim(), al: aliases, nt: nt.checked, cal: cal.value.trim() }); toast(`${nm.value.trim() || u.email}を保存しました`); } catch (e) { toast('保存できませんでした'); }
         } }, '保存'))));
   }
   return sec;
