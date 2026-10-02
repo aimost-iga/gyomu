@@ -429,3 +429,29 @@ em.dl.up{color:var(--good)} em.dl.dn{color:var(--bad)}
 .card.forgot{background:linear-gradient(180deg,var(--surface),color-mix(in srgb,var(--surface) 80%,var(--brand-soft)))}
 .card.forgot > h3::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--brand);margin-right:-2px}
 .card.forgot > h3{justify-content:flex-start}
+/* 月の予定の分析 */
+.calan{display:flex;flex-direction:column;gap:12px}
+.ca-top{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ca-top > div{display:flex;flex-direction:column;gap:1px}
+.ca-top small{font-size:11.5px;color:var(--ink3)}
+.ca-top b{font-size:26px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.ca-top b.ok{color:var(--good)} .ca-top b.ng{color:var(--bad)} .ca-top b.mid{color:var(--warn)}
+.ca-top span{font-size:11.5px;color:var(--ink3)}
+.kb{display:flex;height:12px;border-radius:7px;overflow:hidden;background:var(--line2)}
+.kb i{display:block;height:100%}
+.kl{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink2)}
+.kl i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:5px}
+.ca-cnt{grid-template-columns:repeat(4,1fr)}
+.hm-wrap summary{font-size:13px}
+.hm{display:flex;flex-direction:column;gap:2px;margin-top:8px}
+.hm-row{display:grid;grid-template-columns:18px repeat(15,1fr);gap:2px;align-items:center}
+.hm-row i{display:block;height:14px;border-radius:3px;background:var(--navy)}
+.hm-row > i{box-shadow:inset 0 0 0 100px transparent}
+.hm-hd span{font-size:9px;color:var(--ink3);text-align:left}
+.hm-w{font-size:11px;color:var(--ink2)}
+.hm-row:not(.hm-hd){background:linear-gradient(var(--line2),var(--line2)) right/calc(100% - 20px) 100% no-repeat;border-radius:3px}
+.pcal summary{font-size:13px;color:var(--ink2)}
+.pcal[open] summary{margin-bottom:10px}
+.adm-seg button{padding:6px 10px;font-size:12.5px}
+.skd{font-size:10px;color:var(--ink3);line-height:1}
+.spark:has(.skd){height:62px}

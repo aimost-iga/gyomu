@@ -743,17 +743,23 @@ function adminGame(){
 S.adm = { mon: 'cur', docs: null, key: '' };
 function monRange(which){
   const d = toDate(S.today);
-  if (which === 'last') { const a = new Date(d.getFullYear(), d.getMonth() - 1, 1), b = new Date(d.getFullYear(), d.getMonth(), 0); const pa = new Date(d.getFullYear(), d.getMonth() - 2, 1), pb = new Date(d.getFullYear(), d.getMonth() - 1, 0); return { from: ymd(a), to: ymd(b), pfrom: ymd(pa), pto: ymd(pb), label: `${a.getMonth() + 1}月` }; }
+  if (which === 'week' || which === 'lweek') {
+    const ws = weekStart(S.today), off = which === 'lweek' ? -7 : 0;
+    const from = addDays(ws, off), end = addDays(from, 6), to = which === 'lweek' ? end : S.today;
+    const span = Math.round((toDate(to) - toDate(from)) / 86400000);
+    return { from, to, end, pfrom: addDays(from, -7), pto: addDays(from, span - 7), label: which === 'lweek' ? '先週' : '今週', week: true };
+  }
+  if (which === 'last') { const a = new Date(d.getFullYear(), d.getMonth() - 1, 1), b = new Date(d.getFullYear(), d.getMonth(), 0); const pa = new Date(d.getFullYear(), d.getMonth() - 2, 1), pb = new Date(d.getFullYear(), d.getMonth() - 1, 0); return { from: ymd(a), to: ymd(b), end: ymd(b), pfrom: ymd(pa), pto: ymd(pb), label: `${a.getMonth() + 1}月` }; }
   const [pf, pt] = lastMonthSame(S.today);
-  return { from: monthStart(S.today), to: S.today, pfrom: pf, pto: pt, label: `${d.getMonth() + 1}月` };
+  return { from: monthStart(S.today), to: S.today, end: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)), pfrom: pf, pto: pt, label: `${d.getMonth() + 1}月` };
 }
 async function loadAdmin(force){
   if (!FB.isAdmin()) return;
-  const r = monRange(S.adm.mon); const key = r.pfrom + r.to;
+  const r = monRange(S.adm.mon); const key = r.pfrom + r.end;
   if (!force && S.adm.key === key && S.adm.docs) return;
   S.adm.key = key; S.adm.docs = null; rerender();
   await loadUsers(); S.pushAll = await FB.push.all();
-  S.adm.docs = (await FB.day.range(r.pfrom, r.to)) || [];
+  S.adm.docs = (await FB.day.range(r.pfrom, r.end)) || [];
   rerender();
 }
 const per = (n, ms) => ms > 600000 ? n / (ms / 3600000) : null;
@@ -766,7 +772,7 @@ function delta(now, before){
 function renderAdmin(main){
   const r = monRange(S.adm.mon);
   add(main, el('div', { class: 'sethead' }, el('button', { class: 'back', onclick: () => go('today'), 'aria-label': '今日の画面に戻る' }, '‹'), el('h1', { text: '管理' }),
-    el('div', { class: 'seg adm-seg', role: 'group', 'aria-label': '月を選ぶ' }, [['cur', '今月'], ['last', '先月']].map(([v, t]) => el('button', { 'aria-pressed': String(S.adm.mon === v), onclick: () => { S.adm.mon = v; loadAdmin(true); } }, t)))));
+    el('div', { class: 'seg adm-seg', role: 'group', 'aria-label': '月を選ぶ' }, [['week', '今週'], ['lweek', '先週'], ['cur', '今月'], ['last', '先月']].map(([v, t]) => el('button', { 'aria-pressed': String(S.adm.mon === v), onclick: () => { S.adm.mon = v; loadAdmin(true); } }, t)))));
   if (!S.adm.docs) { add(main, el('div', { class: 'card' }, el('div', { class: 'muted', text: '読み込んでいます…' }))); return; }
   const rows = byPerson(S.adm.docs, r.from, r.to).filter(x => { const u = (S.users || []).find(y => y.email === x.u); return !u || u.nt !== false; });
   const prev = {}; byPerson(S.adm.docs, r.pfrom, r.pto).forEach(x => { prev[x.u] = x.t; });
@@ -774,16 +780,22 @@ function renderAdmin(main){
   const psum = k => Object.values(prev).reduce((a, t) => a + (k === 'work' ? t.work : t[k]), 0);
   // 会社全体
   add(main, el('section', { class: 'adm-total' },
-    el('div', { class: 'at-main' }, el('small', { text: `${r.label}の獲得（全員）` }), el('b', { text: nf(sum('got')) }), delta(sum('got'), psum('got'))),
+    el('div', { class: 'at-main' }, el('small', { text: `${r.label}の獲得（全員）${r.week ? `　${md(r.from)}〜${md(r.end)}` : ''}` }), el('b', { text: nf(sum('got')) }), delta(sum('got'), psum('got'))),
     el('div', { class: 'at-sub' }, [['稼働', h1(sum('work')) + 'h', delta(sum('work'), psum('work'))], ['訪問', nf(sum('doors')), delta(sum('doors'), psum('doors'))], ['反響対応', nf(sum('han')), delta(sum('han'), psum('han'))], ['配布', nf(sum('post')), delta(sum('post'), psum('post'))]]
       .map(([l, v, d]) => el('div', null, el('small', { text: l }), el('b', { text: v }), d))),
-    el('div', { class: 'at-note', text: S.adm.mon === 'cur' ? '増減は先月の同じ日までとの比較です' : '増減はその前の月との比較です' })));
+    el('div', { class: 'at-note', text: { cur: '増減は先月の同じ日までとの比較です', last: '増減はその前の月との比較です', week: '増減は先週の同じ曜日までとの比較です', lweek: '増減はその前の週との比較です' }[S.adm.mon] })));
   // 量と成果の図
   add(main, quadrant(rows));
+  // 月の予定（カレンダー）
+  const end = r.end || r.to;
+  const allDays = {}; const teamCal = { kind: { door: 0, call: 0, post: 0, apo: 0, other: 0 }, total: 0, past: 0, future: 0, apo: 0, planDays: 0, offDays: 0, emptyDays: 0, roughDays: 0, heat: Array.from({ length: 7 }, () => Array(24).fill(0)), actual: 0 };
+  const perCal = {};
+  rows.forEach(x => { const o = perCal[x.u] = calStats(x.days, r.from, end, x.u); for (const k in o.kind) teamCal.kind[k] += o.kind[k]; ['total', 'past', 'future', 'apo', 'planDays', 'offDays', 'emptyDays', 'roughDays', 'actual'].forEach(k => { teamCal[k] += o[k]; }); o.heat.forEach((row, i) => row.forEach((v, j) => { teamCal.heat[i][j] += v; })); });
+  add(main, el('section', { class: 'card' }, el('h3', null, `${r.label}の予定（Googleカレンダー）`, el('small', { text: '全員の合計' })), calCard(teamCal, r.label, true)));
   // 一人ずつ
   add(main, el('h2', { class: 'sh' }, '一人ずつ', el('small', { text: '仕事の量と成果' })));
   const mx = k => Math.max(1, ...rows.map(x => k === 'work' ? x.t.work : x.t[k]));
-  const today = S.adm.mon === 'cur';
+  const today = S.adm.mon === 'cur' || S.adm.mon === 'week';
   rows.sort((a, b) => b.t.got - a.t.got || b.t.work - a.t.work).forEach(x => {
     const t = x.t, p = prev[x.u] || null;
     const st = today ? statOf(x.days[S.today], true, x.u) : null;
@@ -800,17 +812,67 @@ function renderAdmin(main){
       el('div', { class: 'pg res' }, el('h4', { text: '成果' }), bar('獲得', 0, nf(t.got), 'got'), bar('対面', 0, nf(t.face), 'face'), bar('アポ', 0, nf(t.apo), 'apo')),
       el('div', { class: 'pr' }, [['訪問/時', f1(per(t.doors, t.h.door))], ['対面率', t.doors ? Math.round(t.face / t.doors * 100) + '%' : '—'], ['獲得/10時間', f1(t.work > 600000 ? t.got / (t.work / 36000000) : null)], ['1件あたり', t.got ? h1(t.work / t.got) + 'h' : '—']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
       spark(x, r),
+      el('details', { class: 'pcal' }, el('summary', { text: `${r.label}の予定の分析` }), calCard(perCal[x.u] || calStats(x.days, r.from, end, x.u), r.label)),
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
   add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), adminGame(), rosterBox());
 }
+// ===== 月の予定（Googleカレンダー）の分析 =====
+const CK = { door: '訪販', call: '反響', post: '配布', apo: 'アポ', other: 'その他' };
+const CKC = { door: 'var(--k-door)', call: 'var(--k-call)', post: 'var(--k-post)', apo: '#8E5CD9', other: 'var(--k-other)' };
+function calStats(days, from, end, u){
+  const o = { kind: { door: 0, call: 0, post: 0, apo: 0, other: 0 }, total: 0, past: 0, future: 0, apo: 0, planDays: 0, offDays: 0, emptyDays: 0, roughDays: 0, heat: Array.from({ length: 7 }, () => Array(24).fill(0)), actual: 0, pastPlanDays: 0 };
+  for (let d = from; d <= end; d = addDays(d, 1)) {
+    const doc = days[d]; const ev = (doc && doc.cal && doc.cal.ev) || [];
+    const off = doc && (doc.off || (doc.cal && doc.cal.off));
+    const wd = (toDate(d).getDay() + 6) % 7; // 月=0
+    if (off) { o.offDays++; continue; }
+    if (!ev.length) { if (d < S.today && wd < 5) o.emptyDays++; continue; }
+    o.planDays++; if (d <= S.today) o.pastPlanDays++;
+    let dayMin = 0;
+    ev.forEach(e => {
+      const a = toMin(e.s), b = toMin(e.e === '24:00' ? '23:59' : e.e); if (a == null || b == null || b <= a) return;
+      const ms = (b - a) * 60000; const k = CK[e.k] ? e.k : 'other';
+      o.kind[k] += ms; o.total += ms; dayMin += b - a; if (k === 'apo') o.apo++;
+      if (d > S.today) o.future += ms; else o.past += ms;
+      for (let m = a; m < b; m += 30) o.heat[wd][Math.floor(m / 60)] += .5;
+    });
+    if (ev.length === 1 && dayMin >= 360) o.roughDays++;
+    if (d <= S.today && doc) o.actual += statOf(doc, d === S.today, u).work;
+  }
+  return o;
+}
+function kindBar(kind, total){
+  return el('div', { class: 'kb' }, Object.keys(CK).filter(k => kind[k]).map(k => el('i', { style: `width:${(kind[k] / total * 100).toFixed(1)}%;background:${CKC[k]}`, title: `${CK[k]} ${h1(kind[k])}h` })));
+}
+function heatMap(heat){
+  const mx = Math.max(1, ...heat.flat()); const H0 = 7, H1 = 22;
+  return el('div', { class: 'hm', role: 'img', 'aria-label': '曜日と時間帯ごとの予定の入り方' },
+    el('div', { class: 'hm-row hm-hd' }, el('span'), Array.from({ length: H1 - H0 }, (_, i) => el('span', { text: (H0 + i) % 3 === 0 ? String(H0 + i) : '' }))),
+    '月火水木金土日'.split('').map((w, r) => el('div', { class: 'hm-row' }, el('span', { class: 'hm-w', text: w }),
+      Array.from({ length: H1 - H0 }, (_, i) => { const v = heat[r][H0 + i]; return el('i', { style: `opacity:${v ? (.15 + .85 * v / mx).toFixed(2) : 0}`, title: `${w} ${H0 + i}時台 ${v}時間` }); }))));
+}
+function calCard(o, label, isTeam){
+  if (!o.total && !o.offDays) return el('div', { class: 'muted', text: 'この期間のカレンダーの予定はまだありません（共有されると10分ほどで入ります）。' });
+  const rate = o.past ? Math.round(o.actual / o.past * 100) : null;
+  return el('div', { class: 'calan' },
+    el('div', { class: 'ca-top' },
+      el('div', null, el('small', { text: '予定の合計' }), el('b', { text: h1(o.total) + 'h' }), el('span', { text: o.future ? `うち今日より先 ${h1(o.future)}h` : '' })),
+      el('div', null, el('small', { text: '今日までの予定に対する実際' }), el('b', { class: rate == null ? '' : rate >= 80 ? 'ok' : rate < 50 ? 'ng' : 'mid', text: rate == null ? '—' : rate + '%' }), el('span', { text: o.past ? `予定 ${h1(o.past)}h／実際 ${h1(o.actual)}h` : '' }))),
+    kindBar(o.kind, o.total),
+    el('div', { class: 'kl' }, Object.keys(CK).filter(k => o.kind[k]).map(k => el('span', null, el('i', { style: `background:${CKC[k]}` }), `${CK[k]} ${h1(o.kind[k])}h`))),
+    el('div', { class: 'pr ca-cnt' }, [['予定のある日', o.planDays + '日'], ['休み', o.offDays + '日'], ['予定なしの平日', o.emptyDays + '日'], ['アポ', o.apo + '件']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
+    o.roughDays ? el('div', { class: 'ins dn', text: `1日に大きな予定が1つだけの日が${o.roughDays}日あります。中身がわからないので、「訪販 ○○区」「反響」のように分けて入れてもらうと、分析が正確になります。` }) : null,
+    o.emptyDays ? el('div', { class: 'ins dn', text: `予定も休みも入っていない平日が${o.emptyDays}日あります。` }) : null,
+    el('details', { class: 'hm-wrap' }, el('summary', { text: '曜日と時間帯ごとの予定の入り方' }), heatMap(o.heat)));
+}
+
 // 日ごとの稼働（棒）と獲得（点）
 function spark(x, r){
-  const d0 = toDate(r.from), last = toDate(r.to).getMonth() === d0.getMonth() && r.to !== S.today ? new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate() : new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
-  const cols = []; let mx = 1;
-  for (let i = 1; i <= last; i++) { const d = ymd(new Date(d0.getFullYear(), d0.getMonth(), i)); const st = d <= r.to && x.days[d] ? statOf(x.days[d], d === S.today, x.u) : null; cols.push([d, st]); if (st) mx = Math.max(mx, st.work); }
+  const end = r.end || r.to; const cols = []; let mx = 1;
+  for (let d = r.from; d <= end; d = addDays(d, 1)) { const st = d <= r.to && x.days[d] ? statOf(x.days[d], d === S.today, x.u) : null; cols.push([d, st]); if (st) mx = Math.max(mx, st.work); }
   return el('div', { class: 'spark', role: 'img', 'aria-label': `${x.name}さんの日ごとの稼働と獲得` }, cols.map(([d, st]) => el('div', { class: 'sk' + (d === S.today ? ' today' : '') + (st && st.off ? ' off' : ''), title: st ? `${md(d)} 稼働${hm(st.work)}・獲得${st.got}` : md(d) },
-    st && st.got ? el('em') : null, el('i', { style: `height:${st && st.work ? Math.max(6, Math.round(st.work / mx * 100)) : 0}%` }))));
+    st && st.got ? el('em') : null, el('i', { style: `height:${st && st.work ? Math.max(6, Math.round(st.work / mx * 100)) : 0}%` }), r.week ? el('span', { class: 'skd', text: WEEK[toDate(d).getDay()] }) : null)));
 }
 // 仕事の量（稼働時間）× 成果（獲得）の図
 function quadrant(rows){

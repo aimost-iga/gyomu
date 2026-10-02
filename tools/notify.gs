@@ -226,43 +226,52 @@ function readCals_(now) {
   const users = people_();
   const P = PropertiesService.getScriptProperties();
   const stat = {};
+  const today = ymdJst_(now); const t0 = dateOf_(today);
+  const monthEnd = new Date(t0.getFullYear(), t0.getMonth() + 1, 1);            // 月末の次の日
+  const ahead = new Date(Math.max(monthEnd.getTime(), t0.getTime() + 15 * 86400000)); // 月末か2週間先の遅い方まで
   users.forEach(u => {
     if (u.nt === false) return;
     const uk = ukey_(u.email); const id = (u.cal || u.email).trim();
     let cal = null;
     try { cal = CalendarApp.getCalendarById(id); if (!cal) { try { cal = CalendarApp.subscribeToCalendar(id, { hidden: true, selected: false }); } catch (e) {} } } catch (e) { cal = null; }
     if (!cal) { stat[uk] = { ok: false, at: now.getTime() }; return; }
-    stat[uk] = { ok: true, at: now.getTime(), id: id };
-    // 初回だけ過去31日分、あとは昨日と今日（予定の書き換えに追いつくため）
+    stat[uk] = { ok: true, at: now.getTime() };
+    // 初回だけ過去31日分、あとは昨日から。先は月末（または2週間先）まで。1回の読み取りでまとめて取る
     const doneKey = 'calback_' + uk;
     const back = P.getProperty(doneKey) ? 1 : 31;
-    for (let i = back; i >= 0; i--) {
-      const day = new Date(now.getTime() - i * 86400000);
-      try { writeCalDay_(cal, u, uk, ymdJst_(day)); } catch (e) { log_('カレンダーを書けなかった：' + u.email + ' ' + e.message); }
-    }
+    const from = new Date(t0.getTime() - back * 86400000);
+    let evs = [];
+    try { evs = cal.getEvents(from, ahead); } catch (e) { log_('カレンダーを読めなかった：' + u.email + ' ' + e.message); return; }
+    const byDay = {};
+    for (let d = new Date(from); d < ahead; d = new Date(d.getTime() + 86400000)) byDay[ymdJst_(d)] = { list: [], off: false };
+    evs.forEach(e => {
+      const t = String(e.getTitle() || '').slice(0, 40);
+      if (e.isAllDayEvent()) {
+        if (!OFF_RE.test(t)) return;
+        for (let d = new Date(e.getAllDayStartDate()); d < e.getAllDayEndDate(); d = new Date(d.getTime() + 86400000)) { const k = ymdJst_(d); if (byDay[k]) byDay[k].off = true; }
+        return;
+      }
+      const a = e.getStartTime(), b = e.getEndTime();
+      for (let d = dateOf_(ymdJst_(a)); d < b; d = new Date(d.getTime() + 86400000)) {
+        const k = ymdJst_(d); if (!byDay[k]) continue;
+        const ds = dateOf_(k), de = new Date(ds.getTime() + 86400000);
+        const s = a <= ds ? '00:00' : Utilities.formatDate(a, 'Asia/Tokyo', 'HH:mm');
+        const z = b >= de ? '24:00' : Utilities.formatDate(b, 'Asia/Tokyo', 'HH:mm');
+        if (s !== z) byDay[k].list.push({ s, e: z, t, k: calKind_(t) });
+      }
+    });
+    Object.keys(byDay).forEach(k => { try { writeCalDay_(u, uk, k, byDay[k].list, byDay[k].off); } catch (e) { log_('カレンダーを書けなかった：' + u.email + ' ' + e.message); } });
     if (back > 1) P.setProperty(doneKey, '1');
   });
-  // 共有できているかどうか（管理画面に出す）
   const f = {}; Object.keys(stat).forEach(k => { f[k] = { mapValue: { fields: { ok: { booleanValue: stat[k].ok }, at: { integerValue: String(stat[k].at) } } } }; });
   if (Object.keys(f).length) fsFetch_(FS + '/cfg/calstat', { method: 'patch', payload: JSON.stringify({ fields: f }) });
 }
-function writeCalDay_(cal, u, uk, day) {
-  const st = dateOf_(day), en = new Date(st.getTime() + 86400000);
-  const evs = cal.getEvents(st, en);
-  const list = []; let off = false;
-  evs.forEach(e => {
-    const t = String(e.getTitle() || '').slice(0, 40);
-    if (e.isAllDayEvent()) { if (OFF_RE.test(t)) off = true; return; }
-    const a = e.getStartTime(), b = e.getEndTime();
-    const s = a < st ? '00:00' : Utilities.formatDate(a, 'Asia/Tokyo', 'HH:mm');
-    const z = b > en ? '24:00' : Utilities.formatDate(b, 'Asia/Tokyo', 'HH:mm');
-    if (s === z) return;
-    list.push({ s, e: z, t, k: calKind_(t) });
-  });
+function writeCalDay_(u, uk, day, list, off) {
   list.sort((x, y) => x.s < y.s ? -1 : 1);
   const sig = JSON.stringify([list, off]);
   const P = PropertiesService.getScriptProperties(); const key = 'calsig_' + day + '_' + uk;
   if (P.getProperty(key) === sig) return;
+  if (P.getProperty(key) == null && !list.length && !off) { P.setProperty(key, sig); return; } // 予定のない日は書かない
   const evF = list.slice(0, 40).map(x => ({ mapValue: { fields: { s: { stringValue: x.s }, e: { stringValue: x.e }, t: { stringValue: x.t }, k: { stringValue: x.k } } } }));
   const body = { fields: { u: { stringValue: u.email }, d: { stringValue: day }, cal: { mapValue: { fields: { ev: { arrayValue: { values: evF } }, off: { booleanValue: off }, at: { integerValue: String(Date.now()) } } } } } };
   fsFetch_(FS + '/day/' + day + '_' + uk + '?updateMask.fieldPaths=u&updateMask.fieldPaths=d&updateMask.fieldPaths=cal', { method: 'patch', payload: JSON.stringify(body) });
