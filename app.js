@@ -106,12 +106,16 @@ function postDue(doc, d){
   const nowM = d < S.today ? 1e9 : d > S.today ? -1 : new Date().getHours() * 60 + new Date().getMinutes();
   return calEv(doc).filter(e => e.k === 'post' && !e.wait && toMin(e.e === '24:00' ? '23:59' : e.e) <= nowM);
 }
-// その日の期間の配布エリア（ポスティング台帳から）
+// その日の期間の配布エリア（ポスティング反響台帳から自動で入る）
+// 並び：自分が配る担当のエリア → 配布済みのエリア → そのほかのリストのエリア
+const isMe = who => { if (!who) return false; const w = String(who).replace(/\s/g, ''); const names = [ME.name].concat(((S.users || []).find(u => u.email === ME.id) || {}).al || []).map(x => String(x || '').replace(/\s/g, '')).filter(Boolean); return names.some(n => n === w || n.startsWith(w) || w.startsWith(n)); };
 function areasFor(d){
-  const per = ((S.area && S.area.per) || []).filter(p => p && d.slice(0, 6) >= p.from && d.slice(0, 6) <= p.to);
+  const ds = d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8);
+  const per = ((S.areas && S.areas.rounds) || []).filter(r => r && r.start <= ds && (!r.end || ds <= r.end));
   const m = new Map();
-  per.forEach(p => { const r = (S.areas || {})[p.id]; ((r && r.areas) || []).forEach(a => { const o = m.get(a.a); if (o) { o.b += a.b; o.h += a.h; } else m.set(a.a, Object.assign({}, a)); }); });
-  return { per, list: [...m.values()].sort((a, b) => b.h - a.h) };
+  per.forEach(r => (r.areas || []).forEach(a => { const o = m.get(a.a); if (o) { o.on = o.on || a.on; o.mine = o.mine || isMe(a.who); } else m.set(a.a, Object.assign({}, a, { mine: isMe(a.who) })); }));
+  const rank = a => a.mine ? 0 : a.on ? 1 : 2;
+  return { per: per.map(r => ({ label: r.name })), list: [...m.values()].sort((x, y) => rank(x) - rank(y) || y.h - x.h) };
 }
 // 最後に動いた時刻（訪問の登録・開始/終了・反響・配布の記録）
 function lastMove(doc, st){
@@ -313,7 +317,7 @@ function postForm(run, day, ev){
   const dl = el('datalist', { id: 'gyAreas' }, [...new Set(areaNames().concat(ar.list.map(a => a.a)))].map(a => el('option', { value: a })));
   const flt = el('input', { type: 'search', placeholder: '絞り込み（例：青葉）', 'aria-label': 'エリアを絞り込む' });
   const grid = el('div', { class: 'achips' });
-  const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q)).slice(0, 60).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
+  const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q)).slice(0, 60).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.mine ? 'あなたの担当・' : a.on ? '配布済み・' : ''}${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
   flt.addEventListener('input', drawAreas); area.addEventListener('input', () => { if (area.value.trim()) { pick = ''; drawAreas(); } });
   drawAreas();
   const num = el('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: '例：400' });
@@ -332,7 +336,7 @@ function postForm(run, day, ev){
   };
   const close = modal(run ? '配布の結果を入れて終了' : `配布の報告${day !== S.today ? '（' + md(day) + '）' : ''}`, [
     ev ? el('div', { class: 'muted', text: `予定：${ev.s}〜${ev.e}「${ev.t}」` }) : null,
-    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}の台帳）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアの台帳がまだ登録されていません。下に入れてください。' })),
+    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}・ポスティング反響台帳より）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアが、ポスティング反響台帳にまだありません。下に入れてください。' })),
     el('label', { class: 'field' }, ar.list.length ? 'リストにないエリア' : 'エリア（市区町村・町名）', area, dl),
     el('div', { class: 'field' }, '建物の種類', chips),
     el('label', { class: 'field' }, '配った枚数', num),
@@ -447,7 +451,6 @@ function watch(){
   S.unsub.push(FB.act.watchDay(S.today, docs => { S.acts = docs || []; rerender(); }));
   S.unsub.push(FB.cfg.watch('goal', d => { S.goal = Object.assign({}, GOAL_DEF, d || {}); rerender(); }));
   S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); rerender(); }));
-  S.unsub.push(FB.cfg.watch('area', d => { S.area = d || {}; rerender(); }));
   S.unsub.push(FB.cfg.watch('areas', d => { S.areas = d || {}; rerender(); }));
   if (FB.isAdmin()) S.unsub.push(FB.cfg.watch('calstat', d => { S.calstat = d || {}; if (S.tab === 'admin') rerender(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
@@ -1100,29 +1103,14 @@ function rosterBox(){
   }
   return sec;
 }
-// 配布エリアの台帳：期間ごとに、ソニーのエリアのリスト（スプレッドシート）を登録
+// 配布エリア：ポスティング反響台帳から自動で入る（表示だけ）
+const DAICHO_URL = 'https://claude.ai/artifact/834DaqXe4mAVrNgKtd4x1e';
 function areaBox(){
-  const per = ((S.area && S.area.per) || []).slice().sort((a, b) => b.from < a.from ? -1 : 1);
-  const ym = (s) => s ? `${+s.slice(0, 4)}年${+s.slice(4)}月` : '';
-  const t = toDate(S.today); const def = ymd(new Date(t.getFullYear(), t.getMonth(), 1)).slice(0, 6), def2 = ymd(new Date(t.getFullYear(), t.getMonth() + 1, 1)).slice(0, 6);
-  const fm = el('input', { type: 'month', value: `${def.slice(0, 4)}-${def.slice(4)}`, 'aria-label': '期間の始まりの月' });
-  const tm = el('input', { type: 'month', value: `${def2.slice(0, 4)}-${def2.slice(4)}`, 'aria-label': '期間の終わりの月' });
-  const url = el('input', { type: 'url', style: 'width:100%', placeholder: 'https://docs.google.com/spreadsheets/d/…', 'aria-label': 'スプレッドシートのURL' });
-  const savePer = async list => { try { await FB.cfg.set('area', Object.assign({}, S.area || {}, { per: list })); } catch (e) { toast('保存できませんでした'); throw e; } };
-  return keepOpen('area', el('details', { class: 'card' }, el('summary', { text: '配布エリアの台帳（代表）' }),
-    el('div', { class: 'muted', text: '期間ごとに、ソニーから来るエリアのリスト（スプレッドシート）のURLを入れてください。「住所」の列から市区町村（政令市は区まで）を自動で数え、配布の報告でエリアを選べるようにします。読み込みは10分ほどかかります。' }),
-    per.length ? per.map(p => { const r = (S.areas || {})[p.id]; return el('div', { class: 'rec' }, el('div', { class: 'rt' }, `${p.label}`, el('small', { text: r ? (r.err ? '読めませんでした：' + r.err : `${r.name || ''}・${(r.areas || []).length}エリア・${nf(r.rows)}棟`) : '読み込み待ち' })),
-      el('a', { class: 'link', href: p.url, target: '_blank', rel: 'noopener' }, '開く'),
-      el('button', { class: 'link', onclick: async () => { await savePer(per.map(x => x.id === p.id ? Object.assign({}, x, { req: Date.now() }) : x)); toast('読み直しを頼みました（10分ほど）'); } }, '読み直す'),
-      el('button', { class: 'del', 'aria-label': 'この期間を消す', onclick: async () => { if (confirm(`${p.label}を消しますか？`)) await savePer(per.filter(x => x.id !== p.id)); } }, '×')); }) : el('div', { class: 'muted', text: 'まだ登録はありません。' }),
-    el('div', { class: 'row' }, fm, el('span', { text: '〜' }), tm), url,
-    el('button', { class: 'btn primary', onclick: async () => {
-      const f = fm.value.replace('-', ''), to = tm.value.replace('-', ''), u = url.value.trim();
-      if (f.length !== 6 || to.length !== 6 || to < f) { toast('期間の月を正しく選んでください'); return; }
-      if (!/docs\.google\.com\/spreadsheets\//.test(u)) { toast('GoogleスプレッドシートのURLを入れてください'); return; }
-      const label = f.slice(0, 4) === to.slice(0, 4) ? `${f.slice(0, 4)}年${+f.slice(4)}${f === to ? '' : '・' + +to.slice(4)}月` : `${ym(f)}〜${ym(to)}`;
-      await savePer(per.concat([{ id: 'p' + uid(), label, from: f, to, url: u }])); url.value = ''; toast(`${label}の台帳を登録しました`);
-    } }, 'この期間の台帳を登録')));
+  const rs = (S.areas && S.areas.rounds) || [];
+  return keepOpen('area', el('details', { class: 'card' }, el('summary', { text: '配布エリア（ポスティング反響台帳とつながっています）' }),
+    el('div', { class: 'muted', text: 'ポスティング反響台帳の「配布エリア」（配布回ごとのエリア・配布済み・配った人）が自動で入り、配布の報告でエリアを選べます。エリアを変えるときは台帳の方で変えてください（台帳を開くと書き出され、10分ほどでここに入ります）。' }),
+    rs.length ? rs.map(r => el('div', { class: 'rec' }, el('div', { class: 'rt' }, r.name, el('small', { text: `${(r.start || '').replace(/-/g, '/')}〜${(r.end || '').replace(/-/g, '/')}・${(r.areas || []).length}エリア（配布済み ${(r.areas || []).filter(a => a.on).length}）` })))) : el('div', { class: 'muted', text: 'まだ入っていません（10分ほどお待ちください）。' }),
+    el('div', { class: 'row' }, el('a', { class: 'btn', href: DAICHO_URL, target: '_blank', rel: 'noopener' }, 'ポスティング反響台帳を開く'))));
 }
 // 予定の名前の言葉 → 種類（訪販・反響・配布・アポ）。誤判定を直す
 function kwBox(){

@@ -347,53 +347,33 @@ function toFs_(v) {
   return { stringValue: String(v) };
 }
 
-// ---------- 配布エリアの台帳（ソニーの期間ごとのエリアのリスト） ----------
-// 代表がアプリで期間ごとにスプレッドシートのURLを登録（cfg/area.per）→ ここで「住所」の列から市区町村（政令市は区まで）を数えて cfg/areas に書く
-const SEIREI = ['札幌市', '仙台市', 'さいたま市', '千葉市', '川崎市', '横浜市', '相模原市', '新潟市', '静岡市', '浜松市', '名古屋市', '京都市', '大阪市', '堺市', '神戸市', '岡山市', '広島市', '北九州市', '福岡市', '熊本市'];
-function areaOf_(addr) {
-  let a = String(addr || '').normalize('NFKC').replace(/[\s　]/g, '');
-  a = a.replace(/^(東京都|北海道|(?:京都|大阪)府|.{2,3}県)/, '');
-  for (const c of SEIREI) if (a.indexOf(c) === 0) { const m = a.slice(c.length).match(/^(.+?区)/); return c + (m ? m[1] : ''); }
-  const m = a.match(/^(?:.+?郡)?(.+?[市区町村])/);
-  return m ? m[1] : '';
-}
+// ---------- 配布エリアの台帳（ポスティング反響台帳 → スプレッドシート「配布エリア（自動）」 → cfg/areas） ----------
+// ポスティング反響台帳（Claudeのアプリ）が、配布回ごとのエリア・配布済み・配った人を申込フォームのスプレッドシートに書き出している。
+// ここではそれを読んで、業務管理アプリの配布報告でエリアを選べるように cfg/areas に写す。
+const AREA_SHEET = '1TXDWfuCO5eP311TxvoYuF84A3_UAFm7ZY3AW4U1uxfQ';
+const AREA_TAB = '配布エリア（自動）';
 function readAreas_(now) {
-  const cfg = getDoc_('cfg/area'); if (!cfg || !cfg.per) return;
-  const P = PropertiesService.getScriptProperties(); const today = ymdJst_(now);
-  const cur = getDoc_('cfg/areas') || {};
-  const fields = {}, mask = [];
-  (cfg.per || []).forEach(p => {
-    if (!p || !p.id || !p.url) return;
-    const key = 'area_' + p.id, want = p.url + '|' + (p.req || '') + '|' + today.slice(0, 8);
-    if (P.getProperty(key) === want && cur[p.id]) return;
-    let out;
-    try { out = sheetAreas_(p.url); } catch (e) { out = { err: String(e.message).slice(0, 120), areas: [] }; }
-    out.at = now.getTime(); out.url = p.url;
-    fields[p.id] = toFs_(out); mask.push(p.id); P.setProperty(key, want);
-  });
-  if (mask.length) fsFetch_(FS + '/cfg/areas?' + mask.map(m => 'updateMask.fieldPaths=' + m).join('&'), { method: 'patch', payload: JSON.stringify({ fields }) });
-}
-function sheetAreas_(url) {
-  const ss = SpreadsheetApp.openByUrl(url);
-  const by = {}, seen = {}; let rows = 0;
-  ss.getSheets().forEach(sh => {
-    const n = sh.getLastRow(), c = sh.getLastColumn(); if (n < 2 || c < 2) return;
-    const v = sh.getRange(1, 1, Math.min(n, 3000), Math.min(c, 30)).getValues();
-    let hr = -1, ca = -1, cid = -1, chh = -1, cty = -1;
-    for (let r = 0; r < Math.min(5, v.length) && hr < 0; r++) v[r].forEach((x, i) => { const t = String(x).replace(/\s/g, ''); if (t === '住所' || (ca < 0 && /住所/.test(t))) { hr = r; ca = i; } });
-    if (hr < 0) return;
-    v[hr].forEach((x, i) => { const t = String(x).replace(/\s/g, ''); if (/棟ID/.test(t)) cid = i; if (/総戸数/.test(t)) chh = i; if (/分賃/.test(t)) cty = i; });
-    for (let r = hr + 1; r < v.length; r++) {
-      const ad = v[r][ca]; if (!ad) continue;
-      const id = cid >= 0 ? String(v[r][cid]) : ''; if (id && seen[id]) continue; if (id) seen[id] = 1;
-      const a = areaOf_(ad); if (!a) continue;
-      const o = by[a] = by[a] || { a, b: 0, h: 0, bu: 0 };
-      o.b++; o.h += Number(v[r][chh]) || 0; if (cty >= 0 && /分譲/.test(String(v[r][cty]))) o.bu++;
-      rows++;
-    }
-  });
-  const areas = Object.keys(by).map(k => by[k]).sort((x, y) => y.h - x.h || y.b - x.b).slice(0, 300);
-  return { areas, rows, name: ss.getName() };
+  const sh = SpreadsheetApp.openById(AREA_SHEET).getSheetByName(AREA_TAB); if (!sh) return;
+  const n = sh.getLastRow(); if (n < 3) return;
+  const v = sh.getRange(1, 1, n, 14).getValues();
+  const hr = v.findIndex(r => String(r[0]).trim() === '配布回ID'); if (hr < 0) return;
+  const d_ = x => x instanceof Date ? Utilities.formatDate(x, 'Asia/Tokyo', 'yyyy-MM-dd') : String(x || '').trim().replace(/\//g, '-');
+  const lim = Utilities.formatDate(new Date(now.getTime() - 120 * 86400000), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const by = {};
+  for (let i = hr + 1; i < v.length; i++) {
+    const r = v[i]; const id = String(r[0]).trim(); if (!id || !r[5]) continue;
+    const end = d_(r[3]); if (end && end < lim) continue;
+    const o = by[id] = by[id] || { id, name: String(r[1]), start: d_(r[2]), end, areas: [] };
+    if (o.areas.length >= 250) continue;
+    o.areas.push({ a: String(r[5]).trim(), pref: String(r[6] || ''), on: String(r[4]).trim() === '○', grp: String(r[7] || ''), who: String(r[8] || ''), times: Number(r[9]) || 1, b: Number(r[10]) || 0, h: Number(r[11]) || 0 });
+  }
+  const rounds = Object.keys(by).map(k => by[k]).sort((x, y) => x.start < y.start ? 1 : -1);
+  const sig = JSON.stringify(rounds);
+  const P = PropertiesService.getScriptProperties();
+  const key = 'areasig', h = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, sig, Utilities.Charset.UTF_8));
+  if (P.getProperty(key) === h) return;
+  fsFetch_(FS + '/cfg/areas', { method: 'patch', payload: JSON.stringify({ fields: { src: { stringValue: 'daicho' }, at: { integerValue: String(now.getTime()) }, rounds: toFs_(rounds) } }) });
+  P.setProperty(key, h);
 }
 
 // ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------
