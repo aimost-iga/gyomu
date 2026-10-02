@@ -131,7 +131,7 @@ function lastMove(doc, st){
   for (const f of ['han', 'post']) for (const id in ((doc || {})[f] || {})) t = Math.max(t, +doc[f][id].t || 0);
   return t;
 }
-function visits(list){ const v = { doors: 0, face: 0, got: 0 }; for (const x of list) { v.doors++; if (FACE.includes(x.r)) v.face++; if (x.r === 'got') v.got++; } return v; }
+function visits(list){ const v = { doors: 0, face: 0, got: 0 }; for (const x of list) { v.doors++; v[x.r] = (v[x.r] || 0) + 1; if (FACE.includes(x.r)) v.face++; if (x.r === 'got') v.got++; if (x.t) { const hh = pad(new Date(+x.t).getHours()); v['h' + hh + 'd'] = (v['h' + hh + 'd'] || 0) + 1; if (FACE.includes(x.r)) v['h' + hh + 'f'] = (v['h' + hh + 'f'] || 0) + 1; } } return v; }
 function statOf(doc, live, u){
   doc = doc || {};
   const now = Date.now();
@@ -761,7 +761,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), salesCard(), launcher(), heroBox(st), coachCard(), memoCard());
+  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), salesCard(), launcher(), heroBox(st), coachCard(), doorCard(), memoCard());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -923,6 +923,63 @@ function pointBody(){
     el('div', { class: 'pt-a' }, el('small', { text: '今週の考え方' }), el('b', { text: a[0] }), el('p', { text: a[1] })),
     el('details', { class: 'coach' }, el('summary', null, el('span', { text: '今週のやりとりの確認' }), el('small', { text: '3つ' })),
       el('ul', { class: 'pt-ck' }, ck.map(t => el('li', { text: t })))));
+}
+// ===== 訪販の分析（今月）：訪問マップの記録から =====
+const RES_J = [['away', '不在'], ['ihng', 'インターホンNG'], ['fng', '対面NG'], ['again', '再訪'], ['got', '獲得'], ['vac', '未入居']];
+function doorSum(days, u, from, to){
+  const t = { doors: 0, face: 0, got: 0, ms: 0, days: 0, res: {}, hd: {}, hf: {} };
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const doc = days[d]; if (!doc && d !== S.today) continue;
+    const st = statOf(doc || { u, d }, d === S.today, u); const v = st.v || {};
+    if (!v.doors) continue;
+    t.days++; t.doors += v.doors; t.face += v.face; t.got += v.got || 0; t.ms += st.h.door;
+    RES_J.forEach(([k]) => { t.res[k] = (t.res[k] || 0) + (+v[k] || 0); });
+    for (const k in v) { const m = k.match(/^h(\d\d)([df])$/); if (m) (m[2] === 'd' ? t.hd : t.hf)[m[1]] = ((m[2] === 'd' ? t.hd : t.hf)[m[1]] || 0) + (+v[k] || 0); }
+  }
+  return t;
+}
+function doorBody(days, u, from, to){
+  const t = doorSum(days, u, from, to); if (!t.doors) return null;
+  const span = Math.round((toDate(to) - toDate(from)) / 86400000);
+  const pf = addDays(from, -(span + 1)) ; const p = doorSum(days, u, monthStart(addDays(monthStart(from), -1)), addDays(monthStart(addDays(monthStart(from), -1)), span));
+  const g = S.goal || GOAL_DEF;
+  const ph = t.ms > 600000 ? t.doors / (t.ms / 3600000) : null, fr = t.face / t.doors, gr = t.face ? t.got / t.face : 0;
+  const pph = p.ms > 600000 ? p.doors / (p.ms / 3600000) : null, pfr = p.doors ? p.face / p.doors : null, pgr = p.face ? p.got / p.face : null;
+  const dl = (a, b, pctPt) => b == null || !isFinite(b) ? null : pctPt ? (() => { const d = Math.round((a - b) * 1000) / 10; return el('em', { class: 'dl ' + (d > 0 ? 'up' : d < 0 ? 'dn' : ''), text: d ? `${d > 0 ? '+' : ''}${d}pt` : '±0' }); })() : delta(a, b);
+  const cell = (l, v, d) => el('div', { class: 'dk' }, el('small', { text: l }), el('b', { text: v }), d || el('em'));
+  const box = el('div', { class: 'door' },
+    el('div', { class: 'dk-g' },
+      cell('訪問', nf(t.doors), p.doors ? dl(t.doors, p.doors) : null), cell('対面', nf(t.face), p.face ? dl(t.face, p.face) : null), cell('獲得', nf(t.got), p.got ? dl(t.got, p.got) : null),
+      cell('対面率', Math.round(fr * 100) + '%', pfr != null ? dl(fr, pfr, true) : null), cell('対面→獲得', t.face ? (gr * 100).toFixed(1) + '%' : '—', pgr != null && t.face ? dl(gr, pgr, true) : null), cell('訪問/時', ph ? ph.toFixed(1) : '—', ph && pph ? dl(ph, pph) : null)),
+    el('div', { class: 'dk-s', text: `訪販した日 ${t.days}日・訪販の時間 ${h1(t.ms)}時間・1日平均 ${Math.round(t.doors / t.days)}部屋${p.doors ? '　（増減は先月の同じ時期と比べて）' : ''}` }));
+  // 結果の内訳
+  const tot = RES_J.reduce((a, [k]) => a + (t.res[k] || 0), 0) || t.doors;
+  const RC = { away: 'var(--k-other)', ihng: '#8E5CD9', fng: 'var(--bad)', again: 'var(--k-call)', got: 'var(--good)', vac: 'var(--line)' };
+  add(box, el('div', { class: 'kb' }, RES_J.filter(([k]) => t.res[k]).map(([k, l]) => el('i', { style: `width:${(t.res[k] / tot * 100).toFixed(1)}%;background:${RC[k]}`, title: `${l} ${t.res[k]}` }))),
+    el('div', { class: 'kl' }, RES_J.filter(([k]) => t.res[k]).map(([k, l]) => el('span', null, el('i', { style: `background:${RC[k]}` }), `${l} ${Math.round(t.res[k] / tot * 100)}%`))));
+  // 時間帯ごとの対面率
+  const hrs = Object.keys(t.hd).sort(); const pts = [];
+  if (hrs.length >= 2) {
+    const mx = Math.max(...hrs.map(h => t.hd[h]));
+    add(box, el('div', { class: 'dh' }, el('small', { text: '時間帯ごとの訪問数と対面率' }),
+      el('div', { class: 'dh-g' }, hrs.map(h => { const d = t.hd[h], f = t.hf[h] || 0, r = d ? f / d : 0;
+        return el('div', { class: 'dh-c', title: `${+h}時台 訪問${d}・対面${f}` }, el('span', { class: 'dh-r', text: d >= 5 ? Math.round(r * 100) + '%' : '' }), el('div', { class: 'dh-b' }, el('i', { style: `height:${Math.max(4, d / mx * 100)}%;opacity:${(.35 + .65 * Math.min(1, r / .3)).toFixed(2)}` })), el('span', { class: 'dh-h', text: String(+h) })); }))));
+    const good = hrs.filter(h => t.hd[h] >= 10).map(h => [h, (t.hf[h] || 0) / t.hd[h]]).sort((a, b) => b[1] - a[1]);
+    if (good.length >= 2) pts.push(`いちばん会えている時間帯は${+good[0][0]}時台（対面率${Math.round(good[0][1] * 100)}%）、いちばん会えていないのは${+good[good.length - 1][0]}時台（${Math.round(good[good.length - 1][1] * 100)}%）。会える時間帯に訪販を寄せると、同じ時間でも対面が増えます。`);
+  }
+  // ポイント
+  if (t.res.away / tot > .6) pts.push(`不在が${Math.round(t.res.away / tot * 100)}%です。回る時間帯（夕方〜夜・土日）や、新しく入居した建物を優先するなど、会える確率の高い回り方を試してみましょう。`);
+  if (t.res.ihng / tot > .2) pts.push(`インターホンでの断りが${Math.round(t.res.ihng / tot * 100)}%あります。インターホン越しの最初のひとこと（名乗り方・用件の言い方）を見直すと、対面が増えやすいところです。`);
+  if (t.face >= 20 && gr < .05) pts.push(`対面${t.face}件に対して獲得${t.got}件（${(gr * 100).toFixed(1)}%）。会えているので、話の中身（最初の30秒・料金の見せ方・切り返し）を見直す段階です。うまくいった話し方をメモに残しましょう。`);
+  if (ph && ph < (g.door || 60) / (g.std || 6) * .8) pts.push(`1時間あたり${ph.toFixed(1)}部屋で、会社の基準（${((g.door || 60) / (g.std || 6)).toFixed(1)}部屋）より少なめです。建物の回る順番や、移動の時間を見直してみましょう。`);
+  if (t.res.again) pts.push(`再訪が${t.res.again}件あります。再訪の約束は、取れる可能性がいちばん高いお客様です。予定に入れて、確実に回りましょう。`);
+  if (pts.length) add(box, el('div', { class: 'dp' }, pts.map(x => el('p', { text: x }))));
+  return box;
+}
+function doorCard(){
+  const b = doorBody(myDays(), ME.id, monthStart(S.today), S.today);
+  if (!b) return null;
+  return keepOpen('doorc', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: '訪販の分析' }), el('small', { text: `${+S.today.slice(4, 6)}月・訪問マップの記録から` })), b));
 }
 // ===== ひらめきメモ：思いついたこと・考えたことを一行で残す（本人があとで見返せる） =====
 function allMemos(days){
@@ -1228,6 +1285,7 @@ function renderAdmin(main){
       el('div', { class: 'pr' }, [['訪問/時', f1(per(t.doors, t.h.door))], ['対面率', t.doors ? Math.round(t.face / t.doors * 100) + '%' : '—'], ['獲得/10時間', f1(t.work > 600000 ? t.got / (t.work / 36000000) : null)], ['1件あたり', t.got ? h1(t.work / t.got) + 'h' : '—']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
       spark(x, r),
       coachBlock(analyze(x.days, x.u, { from: r.from, to: r.to, self: false })),
+      (() => { const b = doorBody(x.days, x.u, r.from, r.to); return b ? el('details', { class: 'coach' }, el('summary', null, el('span', { text: '訪販の分析' }), el('small', { text: r.label })), b) : null; })(),
       el('details', { class: 'pcal' }, el('summary', { text: `${r.label}の予定の分析` }), calCard(perCal[x.u] || calStats(x.days, r.from, end, x.u), r.label)),
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
