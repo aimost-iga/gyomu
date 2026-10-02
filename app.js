@@ -759,7 +759,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), salesCard(), coachCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
+  add(main, greet(st), salesCard(), coachCard(), pointCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -869,6 +869,59 @@ function coachCard(){
     el('div', { class: 'co ' + top.lv }, el('b', { text: top.title }), el('p', { text: top.fact }), el('p', { class: 'co-ask', text: top.ask })),
     coachBlock(items.filter(i => i !== top), `ほかのポイント ${items.length - 1}件`));
   return box;
+}
+// ===== あなたのポイント：問いかけ・やりとりの確認・考え方（数字にからめて。記入はなし） =====
+const ROLE_LINE = 'あなたの役割は、数字を作ることと、事業を大きくすること。現場の結果が、そのまま会社の結果です。';
+const dayNo = () => Math.floor(toDate(S.today).getTime() / 86400000);
+function pointFacts(){
+  const cm = ymOf(0); const c = (S.sa && S.sa.m && S.sa.m[cm]) || {}; const d = toDate(S.today);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(), passed = d.getDate();
+  const pace = c.acq != null && passed ? Math.round(c.acq / passed * last) : null;
+  const goal = (S.goal && S.goal.monthGot) || GOAL_DEF.monthGot;
+  const k = S.kh && S.kh.m && S.kh.m[S.today.slice(0, 4) + '-' + S.today.slice(4, 6)];
+  const posts = myPosts().list.map(([a, n]) => [a, n, respOf(a)]);
+  const rows = (S.resp && S.resp.rows) || []; const rr = rows.filter(r => r.rate != null && r.dist > 300);
+  const avg = rr.length ? rr.reduce((a, r) => a + r.rate, 0) / rr.length : null;
+  const low = avg != null ? posts.find(([, , r]) => r && r.rate != null && r.rate < avg * .6) : null;
+  // 今月いちばん時間を使った仕事（カレンダー）
+  const kind = {}; for (const [dd, doc] of Object.entries(myDays())) { if (dd.slice(0, 6) !== S.today.slice(0, 6) || dd > S.today) continue; calEv(doc).forEach(e => { const a = toMin(e.s), b = toMin(e.e === '24:00' ? '23:59' : e.e); if (a != null && b > a) kind[e.k] = (kind[e.k] || 0) + (b - a); }); }
+  const topK = Object.entries(kind).sort((a, b) => b[1] - a[1])[0];
+  return { c, pace, goal, left: last - passed, k, low, avg, topK, kindName: { door: '訪販', call: '反響対応', post: '配布', apo: 'アポ・商談', other: '事務・その他' } };
+}
+function pointCard(){
+  const f = pointFacts(); const n = dayNo(), wk = Math.floor((n + 3) / 7);
+  // ① 今日の問い（数字があるものを優先）
+  const qs = [];
+  if (f.pace != null) qs.push(`今月の獲得は今${f.c.acq || 0}件。このままのペースだと月末に${f.pace}件です。目標の${f.goal}件に届かせるには、残り${f.left}日をどう使いますか？`);
+  if (f.low) qs.push(`${f.low[0]}の反響率は${(f.low[2].rate * 100).toFixed(2)}%で、全エリア平均（${(f.avg * 100).toFixed(2)}%）の半分ほどです。次の配布もここにしますか？ 変えるならどこにしますか？`);
+  if (f.topK) qs.push(`今月いちばん時間を使った仕事は「${f.kindName[f.topK[0]] || f.topK[0]}」で、約${Math.round(f.topK[1] / 60)}時間です。その時間は、売上にいくら返ってきましたか？`);
+  if (f.c.acq && f.k && f.k.t) qs.push(`今月は1件取るのに経費が約${yen(f.k.t / f.c.acq)}かかっています。同じ1件を、もっと少ないお金と時間で取る方法はありますか？`);
+  qs.push('今日の予定のうち、あなたにしかできない仕事はどれですか？ 人に任せられるものはありますか？');
+  qs.push('いま会社の売上をいちばん増やせる一手は何だと思いますか？ それを今日の予定に入れていますか？');
+  qs.push('今月の数字で、代表にまだ伝えていない「悪い知らせ」はありますか？');
+  qs.push('もし来月、人が1人増えたら、あなたは何を任せて、自分は何に時間を使いますか？');
+  const q = qs[n % qs.length];
+  // ② 今週の確認（やりとり）
+  const checks = ['今週、代表と数字と方針をすり合わせる時間を取りましたか？', '業務委託さん・代理店さんに、自分から連絡して状況を聞きましたか？', '工事日が決まらないお客様に、自分から連絡しましたか？', 'うまくいったやり方を、もう一人に伝えましたか？', '困っていること・止まっていることを、自分から代表に相談しましたか？', '自分の数字の見込み（今月あと何件取れるか）を、代表に伝えましたか？'];
+  const ck = [0, 1, 2].map(i => checks[(wk * 3 + i) % checks.length]);
+  // ⑤ 考え方（数字にからめて）
+  const ad = [
+    ['売上より粗利で考える', f.k && f.k.t ? `今月の経費は${yen(f.k.t)}。同じ1件でも、遠いエリアや配布の原価が大きいと、会社に残るお金（粗利）は減ります。` : '同じ1件でも、遠いエリアや配布の原価が大きいと、会社に残るお金（粗利）は減ります。'],
+    ['自分が動くだけでは会社は大きくならない', '自分が取れる件数には上限があります。うまくいったやり方を、人に渡せる形（手順・話し方・回る順番）にするのが、会社を大きくする仕事です。'],
+    ['悪い数字ほど早く出す', f.pace != null && f.pace < f.goal ? `今のペースは月末${f.pace}件で、目標まで${f.goal - f.pace}件足りません。早く出すほど、打てる手が増えます。` : '目標に届かないと分かった時点で、すぐ代表に出しましょう。早いほど打てる手が増えます。'],
+    ['数字を「量×率」に分ける', '獲得＝会えた数×取れた割合。足りないとき、量（訪問・配布）が足りないのか、率（話し方・エリア選び）が低いのかを分けると、やることがはっきりします。'],
+    ['時間をお金で考える', f.c.fc && f.topK ? `今月の発生予測は${yen(f.c.fc)}。1時間あたりいくら生んでいるかを意識すると、やめるべき仕事が見えてきます。` : '1時間あたりいくら生んでいるかを意識すると、やめるべき仕事が見えてきます。'],
+    ['先に約束して、あとで確かめる', '月のはじめに「今月は○件・○円」と自分で決め、週ごとに差を見る。決めた数字があると、日々の判断が速くなります。'],
+    ['お客様の「次」まで考える', '獲得はゴールではなく、開通して初めて売上になります。工事日が決まるまで追いかけるのも、数字を作る仕事のうちです。']
+  ];
+  const a = ad[wk % ad.length];
+  return el('section', { class: 'pointc' },
+    el('div', { class: 'cc-h' }, el('b', { text: 'あなたのポイント' })),
+    el('p', { class: 'pt-role', text: ROLE_LINE }),
+    el('div', { class: 'pt-q' }, el('small', { text: '今日の問い' }), el('p', { text: q })),
+    el('div', { class: 'pt-a' }, el('small', { text: '今週の考え方' }), el('b', { text: a[0] }), el('p', { text: a[1] })),
+    el('details', { class: 'coach' }, el('summary', null, el('span', { text: '今週のやりとりの確認' }), el('small', { text: '3つ' })),
+      el('ul', { class: 'pt-ck' }, ck.map(t => el('li', { text: t })))));
 }
 // ===== 今月の数字（いちばん上）：獲得→発生予測、工事予定→売上予測、配布数とそのエリアの反響率 =====
 const ymOf = (off) => { const d = toDate(S.today); const x = new Date(d.getFullYear(), d.getMonth() + (off || 0), 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); };

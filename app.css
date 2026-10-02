@@ -589,3 +589,12 @@ details.coach[open] > summary{margin-bottom:6px}
 details.coach .co{margin-bottom:10px}
 .co-note{margin:0;font-size:11px;color:var(--ink3);line-height:1.5}
 .person details.coach{border-top:1px solid var(--line2);padding-top:6px}
+/* ---- あなたのポイント ---- */
+.pointc{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-lg);padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px}
+.pt-role{margin:0;font-size:12px;line-height:1.6;color:var(--brand);background:var(--brand-soft);border-radius:var(--r-md);padding:8px 10px;font-weight:500}
+.pt-q,.pt-a{display:flex;flex-direction:column;gap:2px}
+.pt-q small,.pt-a small{font-size:11px;color:var(--ink3)}
+.pt-q p{margin:0;font-size:14px;line-height:1.65;font-weight:500}
+.pt-a b{font-size:13.5px;font-weight:600}
+.pt-a p{margin:0;font-size:12.5px;line-height:1.65;color:var(--ink2)}
+.pt-ck{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px;font-size:12.5px;line-height:1.6;color:var(--ink2)}
