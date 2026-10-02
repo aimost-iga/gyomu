@@ -84,7 +84,10 @@ const push = {
 // 経費（経費申請管理のスプレッドシートから Apps Script が書く）：本人は自分の分、代表は全員分
 const kh = {
   mine: next => onSnapshot(ref('kh/' + ukey(ME.email)), s => next(s.exists() ? s.data() : null), () => next(null)),
-  all: next => isAdmin() ? onSnapshot(ref('kh/_all'), s => next(s.exists() ? s.data() : null), () => next(null)) : (next(null), () => {})
+  all: next => isAdmin() ? onSnapshot(ref('kh/_all'), s => next(s.exists() ? s.data() : null), () => next(null)) : (next(null), () => {}),
+  // 売上の数字（ポスティング反響台帳から）：本人は自分の分、代表は全員分
+  sa: next => onSnapshot(ref('kh/sa_' + ukey(ME.email)), s => next(s.exists() ? s.data() : null), () => next(null)),
+  saAll: next => isAdmin() ? onSnapshot(ref('kh/sa_all'), s => next(s.exists() ? s.data() : null), () => next(null)) : (next(null), () => {})
 };
 // 自動のお知らせを送った回数（Apps Script が書く）
 const ntc = {

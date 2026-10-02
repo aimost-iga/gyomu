@@ -552,3 +552,23 @@ details.card.fold[open] > summary::after{content:"−"}
 main{gap:12px}
 .hero{padding:16px 16px 14px}
 .pitem{padding:9px 2px}
+/* ---- 今月の数字（いちばん上） ---- */
+.sales{background:var(--surface);border-radius:var(--r-lg);padding:14px 14px 12px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow);border:1px solid var(--line)}
+.sc-h{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+.sc-h b{font-size:14px;font-weight:600}
+.sc-h small{font-size:11px;color:var(--ink3)}
+.sc-g{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.sc-c{background:var(--bg);border-radius:var(--r-md);padding:10px 10px 9px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.sc-c small{font-size:11px;color:var(--ink3)}
+.sc-c b{font-size:21px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.25}
+.sc-c span{font-size:11.5px;color:var(--brand);font-weight:600;line-height:1.35}
+.sc-note{font-size:11px;color:var(--ink3);line-height:1.5}
+.sc-post{border-top:1px solid var(--line2);padding-top:9px;display:flex;flex-direction:column;gap:6px}
+.sc-ph{display:flex;align-items:baseline;gap:8px}
+.sc-ph small{font-size:12px;color:var(--ink3)}
+.sc-ph b{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+.sc-areas{display:flex;flex-direction:column;gap:4px}
+.sc-a{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:baseline;font-size:12.5px}
+.sc-a span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-a b{font-weight:600;font-variant-numeric:tabular-nums}
+.sc-a em{font-style:normal;color:var(--ink3);font-size:11.5px;font-variant-numeric:tabular-nums;min-width:9.5em;text-align:right}

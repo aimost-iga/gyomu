@@ -334,7 +334,7 @@ function postForm(run, day, ev){
     const n = parseInt(num.value, 10); const a = (pick || area.value.trim());
     if (!a) { toast('配ったエリアを選ぶか入れてください'); return; }
     if (!(n > 0)) { toast('配った枚数を入れてください'); num.focus(); return; }
-    const p = { a, ty, n, t: Date.now() }; if (run) p.sid = run.id; if (pick) p.list = 1; if (ev) p.ev = ev.sig;
+    const p = { a, n, t: Date.now() }; if (run) p.sid = run.id; if (pick) p.list = 1; if (ev) p.ev = ev.sig;
     close();
     const patch = { post: { [uid()]: p } };
     if (run) endSession(patch); else { put(day, patch); toast(`${a} ${nf(n)}枚を記録しました`); }
@@ -344,7 +344,6 @@ function postForm(run, day, ev){
     ev ? el('div', { class: 'muted', text: `予定：${ev.s}〜${ev.e}「${ev.t}」` }) : null,
     el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}の台帳の全${ar.list.length}エリア）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアが、ポスティング反響台帳にまだありません。下に入れてください。' })),
     el('label', { class: 'field' }, ar.list.length ? 'リストにないエリア' : 'エリア（市区町村・町名）', area, dl),
-    el('div', { class: 'field' }, '建物の種類', chips),
     el('label', { class: 'field' }, '配った枚数', num),
     el('button', { class: 'btn primary wide', onclick: () => save(false) }, run ? '記録して終了する' : '記録する'),
     run ? null : el('button', { class: 'btn wide', onclick: () => save(true) }, '記録して、別のエリアも入れる'),
@@ -459,6 +458,9 @@ function watch(){
   S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); rerender(); }));
   S.unsub.push(FB.cfg.watch('areas', d => { S.areas = d || {}; rerender(); }));
   S.unsub.push(FB.kh.mine(d => { S.kh = d; rerender(); }));
+  S.unsub.push(FB.kh.sa(d => { S.sa = d; rerender(); }));
+  S.unsub.push(FB.cfg.watch('arearesp', d => { S.resp = d; rerender(); }));
+  if (FB.isAdmin()) S.unsub.push(FB.kh.saAll(d => { S.saAll = d; rerender(); }));
   if (FB.isAdmin()) S.unsub.push(FB.kh.all(d => { S.khAll = d; if (S.tab === 'admin') rerender(); }));
   if (FB.isAdmin()) S.unsub.push(FB.cfg.watch('calstat', d => { S.calstat = d || {}; if (S.tab === 'admin') rerender(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
@@ -629,7 +631,7 @@ function postBox(st){
   if (S.doc && S.doc.pnone && !list.length) return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: '配っていない' })), el('div', { class: 'muted', text: '理由：' + S.doc.pnone }), st.sub ? null : el('button', { class: 'btn', onclick: () => put(S.today, { pnone: null }) }, '取り消す'));
   if (!list.length && !st.sub) return el('section', { class: 'card slim' }, el('div', { class: 'slim-r' }, el('b', { text: '配布報告' }), el('small', { text: 'まだありません' }), el('button', { class: 'btn', onclick: () => postForm(null) }, '＋ 配布を足す')));
   return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: `今日 ${nf(st.post)}枚` })),
-    list.map(([id, p]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, p.a || 'エリア未記入'), el('span', { class: 'tag', text: p.ty || '' }), el('b', { text: `${nf(p.n)}枚` }),
+    list.map(([id, p]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, p.a || 'エリア未記入'), el('b', { text: `${nf(p.n)}枚` }),
       st.sub ? null : el('button', { class: 'del', 'aria-label': 'この報告を消す', onclick: () => { if (confirm('この配布報告を消しますか？')) drop(S.today, 'post', id); } }, '×'))),
     st.sub ? null : el('button', { class: 'btn', onclick: () => postForm(null) }, '＋ 配布を足す'));
 }
@@ -757,7 +759,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
+  add(main, greet(st), salesCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -775,6 +777,39 @@ function renderToday(main){
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: '予定にない記録' }), el('small', { text: '反響対応・配布' })), rest)));
+}
+// ===== 今月の数字（いちばん上）：獲得→発生予測、工事予定→売上予測、配布数とそのエリアの反響率 =====
+const ymOf = (off) => { const d = toDate(S.today); const x = new Date(d.getFullYear(), d.getMonth() + (off || 0), 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); };
+const man = n => { n = Math.round(+n || 0); return n >= 10000 ? (n / 10000).toFixed(n >= 1000000 ? 0 : 1).replace(/\.0$/, '') + '万円' : yen(n); };
+function myPosts(){
+  const ms = S.today.slice(0, 6); const by = {}; let total = 0;
+  for (const [d, doc] of Object.entries(myDays())) { if (d.slice(0, 6) !== ms) continue; for (const id in (doc.post || {})) { const p = doc.post[id]; const n = +p.n || 0; total += n; const a = p.a || 'エリア未記入'; by[a] = (by[a] || 0) + n; } }
+  return { total, list: Object.entries(by).sort((a, b) => b[1] - a[1]) };
+}
+function respOf(area){
+  const rows = (S.resp && S.resp.rows) || []; const a = String(area || '').replace(/\s/g, '');
+  return rows.find(r => r.g === a || (r.cities || []).includes(a) || (r.cities || []).some(c => a.includes(c) || c.includes(a))) || null;
+}
+function salesCard(){
+  const cm = ymOf(0), nm = ymOf(1);
+  const m = (S.sa && S.sa.m) || {}; const c = m[cm] || {}, n = m[nm] || {};
+  const posts = myPosts();
+  const rate = c.rate || n.rate || 0.7;
+  const big = (label, val, sub) => el('div', { class: 'sc-c' }, el('small', { text: label }), el('b', { text: val }), el('span', { text: sub }));
+  const sec = el('section', { class: 'sales' },
+    el('div', { class: 'sc-h' }, el('b', { text: `${+cm.slice(5)}月の数字` }), el('small', { text: S.sa && S.sa.asof ? `台帳 ${S.sa.asof} 時点` : '' })),
+    el('div', { class: 'sc-g' },
+      big('獲得', `${c.acq || 0}件`, `発生予測 ${man(c.fc)}`),
+      big('今月の工事', `${(c.schedN || 0) + (c.openN || 0)}件`, `売上予測 ${man((c.schedV || 0) + (c.openV || 0))}`),
+      big('来月の工事', `${n.schedN || 0}件`, `売上予測 ${man(n.schedV)}`)));
+  if (!S.sa) add(sec, el('div', { class: 'sc-note', text: 'ポスティング反響台帳を開くと、獲得・工事の数字がここに入ります（名前が合わないときは代表の名簿で別名を）。' }));
+  else add(sec, el('div', { class: 'sc-note', text: `発生予測＝今月の申込×単価×${Math.round(rate * 100)}%・今月の工事は開通済み${c.openN || 0}件を含む` }));
+  const pl = posts.list;
+  add(sec, el('div', { class: 'sc-post' }, el('div', { class: 'sc-ph' }, el('small', { text: '今月の配布' }), el('b', { text: `${nf(posts.total)}枚` })),
+    pl.length ? el('div', { class: 'sc-areas' }, pl.slice(0, 6).map(([a, nn]) => { const r = respOf(a);
+      return el('div', { class: 'sc-a' }, el('span', { text: a }), el('b', { text: `${nf(nn)}枚` }), el('em', { text: r && r.rate != null ? `反響率 ${(r.rate * 100).toFixed(2)}%（${r.resp}件）` : '反響率 —' })); }))
+      : el('div', { class: 'sc-note', text: 'まだ配布の報告はありません。' })));
+  return sec;
 }
 // すぐ使う：よく使うフォームや機能へ1タップで
 const IC = {
@@ -983,6 +1018,7 @@ function renderAdmin(main){
     el('div', { class: 'at-sub' }, [['稼働', h1(sum('work')) + 'h', delta(sum('work'), psum('work'))], ['訪問', nf(sum('doors')), delta(sum('doors'), psum('doors'))], ['反響対応', nf(sum('han')), delta(sum('han'), psum('han'))], ['配布', nf(sum('post')), delta(sum('post'), psum('post'))]]
       .map(([l, v, d]) => el('div', null, el('small', { text: l }), el('b', { text: v }), d))),
     el('div', { class: 'at-note', text: { cur: '増減は先月の同じ日までとの比較です', last: '増減はその前の月との比較です', week: '増減は先週の同じ曜日までとの比較です', lweek: '増減はその前の週との比較です' }[S.adm.mon] })));
+  add(main, salesAdmin(), respAdmin());
   // 量と成果の図
   add(main, quadrant(rows));
   // 月の予定（カレンダー）
@@ -1016,6 +1052,32 @@ function renderAdmin(main){
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
   add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), areaBox(), kwBox(), adminGame(), rosterBox());
+}
+// ===== 売上の数字（担当者別）・エリアの反響（ポスティング反響台帳から） =====
+function salesAdmin(){
+  const cm = ymOf(0), nm = ymOf(1); const rows = (S.saAll && S.saAll.rows) || [];
+  const sec = el('section', { class: 'card' }, el('h3', null, `${+cm.slice(5)}月の獲得と売上予測`, el('small', { text: S.saAll && S.saAll.asof ? `台帳 ${S.saAll.asof} 時点` : '' })));
+  if (!rows.length) { add(sec, el('div', { class: 'muted', text: 'ポスティング反響台帳を開くと、ここに担当者ごとの数字が入ります（10分ほどかかります）。' })); return sec; }
+  const by = {}; rows.forEach(r => { (by[r.st] = by[r.st] || {})[r.m] = r; });
+  const names = Object.keys(by).filter(n => n !== '全員').sort((a, b) => ((by[b][cm] || {}).fc || 0) - ((by[a][cm] || {}).fc || 0)); if (by['全員']) names.push('全員');
+  add(sec, el('div', { class: 'kh-tw' }, el('table', { class: 'kh-t' },
+    el('thead', null, el('tr', null, ['', '獲得', '発生予測', '今月の工事', '売上予測', '来月の工事', '売上予測', '支払額'].map(t => el('th', { text: t })))),
+    el('tbody', null, names.map(n => { const c = by[n][cm] || {}, x = by[n][nm] || {};
+      return el('tr', { class: n === '全員' ? 'kh-sum' : '' }, el('th', null, n, c.type && c.type !== '自社社員' ? el('small', { class: 'muted', text: ' ' + c.type }) : null),
+        el('td', { text: `${c.acq || 0}件` }), el('td', { text: yen(c.fc) }), el('td', { text: `${(c.schedN || 0) + (c.openN || 0)}件` }), el('td', { text: yen((c.schedV || 0) + (c.openV || 0)) }),
+        el('td', { text: `${x.schedN || 0}件` }), el('td', { text: yen(x.schedV) }), el('td', { text: c.fee ? yen(c.fee) : '—' })); })))));
+  add(sec, el('div', { class: 'muted', text: '発生予測＝今月の申込×単価×開通する割合（台帳の設定）。今月の工事＝今月の開通済み＋今月の工事予定。支払額は業務委託・代理店への今月の開通分。' }));
+  return sec;
+}
+function respAdmin(){
+  const rows = ((S.resp && S.resp.rows) || []).slice().sort((a, b) => (b.rate || 0) - (a.rate || 0));
+  if (!rows.length) return null;
+  const rounds = [...new Set(rows.map(r => r.name))];
+  return keepOpen('resp', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: 'エリアごとの配布数と反響率' }), el('small', { text: rounds.join('・') })),
+    el('div', { class: 'kh-tw' }, el('table', { class: 'kh-t' },
+      el('thead', null, el('tr', null, ['エリア', '配った人', '配布数', '反響', '反響率', '獲得'].map(t => el('th', { text: t })))),
+      el('tbody', null, rows.map(r => el('tr', null, el('th', { text: r.g }), el('td', { text: r.who || '—' }), el('td', { text: nf(r.dist) }), el('td', { text: nf(r.resp) }), el('td', { text: r.rate != null ? (r.rate * 100).toFixed(2) + '%' : '—' }), el('td', { text: r.gain != null ? nf(r.gain) : '—' })))))),
+    el('div', { class: 'muted', text: '配布数は台帳の「総戸数×配布回数×配布率」。反響はホームズの反響です。' })));
 }
 // ===== 経費（月ごと・担当者別） =====
 function keihiAdmin(r){

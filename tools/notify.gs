@@ -52,6 +52,7 @@ function tick_(now) {
   const appCfg = getDoc_('cfg/app') || {};
   try { readAreas_(now); } catch (e) { log_('配布エリアの台帳の読み取りの失敗：' + e.message); }
   try { readKeihi_(now); } catch (e) { log_('経費の読み取りの失敗：' + e.message); }
+  try { readSales_(now); } catch (e) { log_('売上の数字の読み取りの失敗：' + e.message); }
   if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
   const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
@@ -423,6 +424,42 @@ function readKeihi_(now) {
   };
   save('_all', { m: all });
   Object.keys(per).forEach(uk => save(uk, per[uk]));
+}
+
+// ---------- 売上の数字・エリアの反響（ポスティング反響台帳が書き出したシート → kh/sa_<人>・kh/sa_all・cfg/arearesp） ----------
+const SALES_TAB = '担当者別の数字（自動）', RESP_TAB = 'エリアの反響（自動）';
+function sheetRows_(ss, tab, head0) {
+  const sh = ss.getSheetByName(tab); if (!sh || sh.getLastRow() < 3) return null;
+  const v = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  const hr = v.findIndex(r => String(r[0]).trim() === head0); if (hr < 0) return null;
+  return { at: String(v[0][0] || ''), rows: v.slice(hr + 1).filter(r => String(r[0]).trim()) };
+}
+function readSales_(now) {
+  const ss = SpreadsheetApp.openById(AREA_SHEET);
+  const P = PropertiesService.getScriptProperties();
+  const md5 = o => Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(o), Utilities.Charset.UTF_8));
+  const putDoc = (path, key, obj) => { const sig = md5(obj); if (P.getProperty(key) === sig) return; const f = {}; Object.keys(obj).forEach(k => { f[k] = toFs_(obj[k]); }); f.at = { integerValue: String(now.getTime()) }; fsFetch_(FS + '/' + path, { method: 'patch', payload: JSON.stringify({ fields: f }) }); P.setProperty(key, sig); };
+  const asOf = t => { const m = String(t).match(/最終更新：([^　\s]+\s*[\d:]*)/); return m ? m[1] : ''; };
+  const sr = sheetRows_(ss, SALES_TAB, '担当者');
+  if (sr) {
+    const users = people_(); const nz = x => String(x || '').normalize('NFKC').replace(/[\s　]/g, '');
+    const who = name => { const k = nz(name); if (!k) return null; return users.find(u => [u.name].concat(u.al || []).map(nz).filter(Boolean).some(a => a === k || k.indexOf(a) === 0 || a.indexOf(k) === 0)) || null; };
+    const all = [], per = {};
+    sr.rows.forEach(r => {
+      const o = { st: String(r[0]), type: String(r[1] || ''), m: String(r[2]), app: +r[3] || 0, acq: +r[4] || 0, cancel: +r[5] || 0, fc: +r[6] || 0, schedN: +r[7] || 0, schedV: +r[8] || 0, openN: +r[9] || 0, openV: +r[10] || 0, fee: +r[11] || 0, rate: +r[12] || 0 };
+      all.push(o);
+      const u = o.st === '全員' ? null : who(o.st);
+      if (u) { const uk = ukey_(u.email); (per[uk] = per[uk] || { u: u.email, st: o.st, m: {} }).m[o.m] = o; }
+    });
+    putDoc('kh/sa_all', 'sasig_all', { rows: all, asof: asOf(sr.at) });
+    Object.keys(per).forEach(uk => putDoc('kh/sa_' + uk, 'sasig_' + uk, Object.assign({ asof: asOf(sr.at) }, per[uk])));
+  }
+  const rr = sheetRows_(ss, RESP_TAB, '配布回ID');
+  if (rr) {
+    const d_ = x => x instanceof Date ? Utilities.formatDate(x, 'Asia/Tokyo', 'yyyy-MM-dd') : String(x || '');
+    const rows = rr.rows.map(r => ({ rid: String(r[0]), name: String(r[1]), start: d_(r[2]), end: d_(r[3]), g: String(r[4]), cities: String(r[5] || '').split('・').filter(Boolean), who: String(r[6] || ''), dist: +r[7] || 0, resp: +r[8] || 0, rate: r[9] === '' ? null : +r[9], valid: +r[10] || 0, gain: r[11] === '' ? null : +r[11] }));
+    putDoc('cfg/arearesp', 'respsig', { rows, asof: asOf(rr.at) });
+  }
 }
 
 // ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------
