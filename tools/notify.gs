@@ -82,7 +82,7 @@ function tick_(now) {
       if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', '振り返りをひとこと書いて提出してください。1分で終わります。']);
     }
     const y = ydays[u.email];
-    if (y && !y.off && !(y.cal && y.cal.off) && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length || (y.v && y.v.doors)) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
+    if (yday >= '20261003' && y && !y.off && !(y.cal && y.cal.off) && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length || (y.v && y.v.doors)) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
       due.push(['yrep', '昨日の日報がまだです', 'アプリを開くと一番上に出ています。ひとことで出せます。']);
 
     due.forEach(([kind, title, body]) => {
