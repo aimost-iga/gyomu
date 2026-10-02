@@ -102,7 +102,7 @@ function statOf(doc, live, u){
   for (const id in (doc.post || {})) { const p = doc.post[id] || {}; post += +p.n || 0; postBy[p.ty || '混在'] = (postBy[p.ty || '混在'] || 0) + (+p.n || 0); }
   const got = v.got + han.got;
   const work = h.door + h.call + h.post + h.other;
-  const pts = v.doors * PT.door + v.face * PT.face + got * PT.got + han.call * PT.call + han.msg * PT.msg + han.conn * PT.conn + han.apo * PT.apo + Math.floor(post / 100) * PT.post100;
+  const pts = (+doc.bonus || 0) + v.doors * PT.door + v.face * PT.face + got * PT.got + han.call * PT.call + han.msg * PT.msg + han.conn * PT.conn + han.apo * PT.apo + Math.floor(post / 100) * PT.post100;
   const plan = Object.entries(doc.plan || {}).map(([id, p]) => Object.assign({ id }, p)).sort((a, b) => (toMin(a.s) || 0) - (toMin(b.s) || 0));
   const ph = { door: 0, call: 0, post: 0, other: 0 };
   for (const p of plan) { const a = toMin(p.s), b = toMin(p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
@@ -304,7 +304,7 @@ function cheer(icon, title, sub, sound){ cheerQ.push([icon, title, sub, sound]);
 function nextCheer(){
   const c = cheerQ[0]; if (!c) return;
   const o = el('div', { class: 'cheer', role: 'status' }, el('em', { text: c[0] }), el('b', { text: c[1] }), c[2] ? el('span', { text: c[2] }) : null);
-  document.body.append(o); confetti(); ding(c[3] || 2);
+  document.body.append(o); confetti(); ding(c[3] || 2); try { navigator.vibrate && navigator.vibrate([30, 50, 30]); } catch (e) {}
   setTimeout(() => o.classList.add('out'), 2300); setTimeout(() => { o.remove(); cheerQ.shift(); nextCheer(); }, 2750);
 }
 // 変化のあと：お題達成・新しい称号・階級アップ
@@ -563,6 +563,7 @@ function reportBox(st){
         const days = myDays(); let best = 0; for (const d in days) if (d < S.today) best = Math.max(best, statOf(days[d], false).pts);
         const pts = statOf(S.doc, true).pts;
         cheer('📝', '日報 提出！', pts > best && best > 0 ? `今日は${pts}点・自己最高を更新！` : `今日は${pts}点・連続${streak(myDays())}日`, 2);
+        setTimeout(treasure, 2900);
       } else toast('日報を直しました');
     } }, st.sub ? '直して保存' : '日報を提出する'));
   return sec;
@@ -597,14 +598,92 @@ function pushNotice(){
     el('div', { class: 'muted', text: S.pushState === 'denied' ? 'お知らせが「許可しない」になっています。スマホの設定から、このアプリ（またはブラウザ）の通知を許可してください。通知を切っているかどうかは代表の画面に出ます。' : '予定や日報の出し忘れを、スマホに直接お知らせします。下のボタンを押して「許可」を選んでください。' }),
     S.pushState === 'denied' ? null : el('button', { class: 'btn primary', onclick: () => pushOn(true) }, 'お知らせを受け取る'));
 }
+// ===== スコアボード（今日の画面の一番上） =====
+const SVGNS = 'http://www.w3.org/2000/svg';
+function ring(val, tgt, size, stroke, label, sub, opts){
+  opts = opts || {};
+  const r = (size - stroke) / 2, c = 2 * Math.PI * r;
+  const p = opts.prog != null ? Math.min(1, opts.prog) : tgt ? Math.min(1, val / tgt) : 0;
+  const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', `0 0 ${size} ${size}`); svg.setAttribute('width', size); svg.setAttribute('height', size); svg.setAttribute('aria-hidden', 'true');
+  const mk = (cls, off) => { const ci = document.createElementNS(SVGNS, 'circle'); ci.setAttribute('cx', size / 2); ci.setAttribute('cy', size / 2); ci.setAttribute('r', r); ci.setAttribute('class', cls); ci.setAttribute('stroke-width', stroke); ci.setAttribute('stroke-dasharray', c.toFixed(1)); ci.setAttribute('stroke-dashoffset', off.toFixed(1)); return ci; };
+  svg.append(mk('rg-bg', 0));
+  const fg = mk('rg-fg' + (p >= 1 ? ' full' : ''), c); svg.append(fg);
+  requestAnimationFrame(() => requestAnimationFrame(() => fg.setAttribute('stroke-dashoffset', (c * (1 - p)).toFixed(1))));
+  const num = el('b', { class: 'rg-num', 'data-to': val, text: opts.anim ? '0' : nf(val) });
+  return el('div', { class: 'rg' + (p >= 1 ? ' done' : '') + (opts.near ? ' near' : ''), style: `--sz:${size}px`, role: 'img', 'aria-label': `${label} ${val}／${tgt}` },
+    svg, el('div', { class: 'rg-in' }, num, sub ? el('small', { text: sub }) : null), label ? el('span', { class: 'rg-lb', text: label }) : null);
+}
+function countUp(root){
+  root.querySelectorAll('.rg-num[data-to]').forEach(e => {
+    const to = +e.dataset.to; const from = +(store.get('lastPts', 0)); if (!to) { e.textContent = '0'; return; }
+    const st = performance.now(), dur = 900;
+    const f = t => { const k = Math.min(1, (t - st) / dur); const v = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3))); e.textContent = nf(v); if (k < 1) requestAnimationFrame(f); };
+    requestAnimationFrame(f);
+  });
+}
+function weekRank(){
+  if (!S.week || !FB.isStaff()) return null;
+  const rows = byPerson(S.week, weekStart(S.today), S.today).sort((a, b) => b.t.pts - a.t.pts);
+  const i = rows.findIndex(r => r.u === ME.id); if (i < 0) return null;
+  return { pos: i + 1, n: rows.length, gap: i > 0 ? rows[i - 1].t.pts - rows[i].t.pts + 1 : (rows[1] ? rows[0].t.pts - rows[1].t.pts : 0), above: i > 0 ? rows[i - 1].name : '' };
+}
+function hud(st){
+  if (FB.isStaff()) loadWeek();
+  const days = myDays(); const mp = sumRange(days, monthStart(S.today), S.today).pts; const rk = rankOf(mp); const sk = streak(days);
+  const ts = st.off ? [] : targetsOf(st);
+  const total = ts.length ? ts.reduce((a, t) => a + Math.min(1, t.val / t.tgt), 0) / ts.length : 0;
+  const near = ts.filter(t => t.val < t.tgt).sort((a, b) => (b.val / b.tgt) - (a.val / a.tgt))[0];
+  const hour = new Date().getHours();
+  const risk = !st.off && !st.sub && st.has && hour >= 19;
+  const wr = weekRank();
+  const lvP = rk.next ? Math.round((mp - rk.base) / (rk.next[0] - rk.base) * 100) : 100;
+  const box = el('section', { class: 'hud' },
+    el('div', { class: 'hud-top' },
+      el('div', { class: 'emb', title: '今月の階級' }, el('span', { text: rk.name })),
+      el('div', { class: 'who' }, el('b', { text: ME.name }), el('div', { class: 'lv' }, el('i', { style: `width:${Math.max(4, lvP)}%` })), el('small', { text: rk.next ? `「${rk.next[1]}」まで ${nf(rk.next[0] - mp)}点` : '最高の階級' })),
+      el('div', { class: 'flame' + (risk ? ' risk' : '') + (sk ? '' : ' out'), title: '連続記録' }, el('span', { class: 'fl', 'aria-hidden': 'true', text: '🔥' }), el('b', { text: sk }), el('small', { text: '日連続' }))),
+    el('div', { class: 'hud-main' },
+      ring(st.pts, 1, 168, 14, '', '今日の点', { anim: true, prog: ts.length ? total : (st.pts ? 1 : 0) }),
+      el('div', { class: 'quests' }, ts.length ? ts.slice(0, 4).map(t => ring(t.val, t.tgt, 66, 7, t.label, `/${nf(t.tgt)}`, { near: near && t === near && t.val / t.tgt >= .6 })) : el('div', { class: 'hud-empty', text: st.off ? '今日は休み' : '予定を申告すると、今日のお題が出ます' }))),
+    el('div', { class: 'hud-msg' + (risk ? ' risk' : '') }, risk ? `今日の日報がまだ。出さないと${sk}日の連続が途切れます` : near ? `あと${nf(near.tgt - near.val)}で「${near.label}」達成` : ts.length && achieved(ts) ? '今日のお題、全部達成！' : st.sub ? '今日もおつかれさまでした' : '今日も1点ずつ積み上げよう'),
+    wr ? el('div', { class: 'hud-rank' }, el('b', { text: `今週 ${wr.pos}位` }), el('span', { text: wr.pos === 1 ? (wr.gap > 0 ? `2位と${nf(wr.gap)}点差。逃げ切ろう` : '同点で並んでいます') : `${wr.above}さんまで あと${nf(wr.gap)}点` })) : null);
+  setTimeout(() => { countUp(box); store.set('lastPts', st.pts); }, 30);
+  return box;
+}
+// 仲間の動き（社員・代表だけ）：今日の獲得・日報・お題達成が流れてくる
+function feedBox(){
+  if (!FB.isStaff() || !S.week) return null;
+  const ev = [];
+  for (const d of S.acts) for (const k in d) { const v = d[k]; if (v && v.r === 'got' && !v.x && v.t) ev.push([v.t, v.u, '訪販で獲得！', 'got']); }
+  for (const d of S.week) { if (d.d !== S.today) continue; for (const id in (d.han || {})) { const r = d.han[id]; if (r && +r.got > 0) ev.push([r.t, d.u, `反響で獲得${r.got > 1 ? r.got + '件' : ''}！`, 'got']); } if (d.sub) ev.push([d.sub, d.u, '日報を提出', 'sub']); }
+  if (!ev.length) return null;
+  ev.sort((a, b) => b[0] - a[0]);
+  return el('section', { class: 'feed', 'aria-label': '今日のみんなの動き' }, ev.slice(0, 6).map(([t, u, txt, k]) =>
+    el('div', { class: 'fd ' + k }, el('span', { class: 'av', text: (nameOf(u) || '?').slice(0, 1) }), el('span', { class: 'fx' }, el('b', { text: u === ME.id ? 'あなた' : nameOf(u) + 'さん' }), txt), el('small', { text: timeOf(t) }))));
+}
+// 日報を出したら開く宝箱：おまけの点（5〜50点、たまに大当たり）
+function treasure(){
+  if (!S.doc || S.doc.bonus != null) return;
+  const r = Math.random(); const b = r < .05 ? 50 : r < .2 ? 25 : r < .55 ? 15 : r < .85 ? 10 : 5;
+  const lid = el('div', { class: 'chest', role: 'button', tabindex: 0, 'aria-label': '宝箱を開ける' }, el('span', { class: 'cb-ic', text: '🎁' }), el('b', { text: '今日の宝箱' }), el('small', { text: '押して開ける' }));
+  const close = modal('おつかれさまでした', [lid, el('div', { class: 'muted', style: 'text-align:center', text: '日報を出した日だけ開けられます。中身は開けるまでわかりません。' })]);
+  const open = () => {
+    lid.classList.add('open'); lid.querySelector('.cb-ic').textContent = b >= 50 ? '💎' : b >= 25 ? '🏆' : '✨';
+    lid.querySelector('b').textContent = `+${b}点`; lid.querySelector('small').textContent = b >= 50 ? '大当たり！' : b >= 25 ? '当たり！' : 'おまけの点';
+    put(S.today, { bonus: b }); if (b >= 25) { confetti(); ding(3); } else ding(1);
+    try { navigator.vibrate && navigator.vibrate(b >= 25 ? [40, 60, 40, 60, 120] : 40); } catch (e) {}
+    setTimeout(close, 1800);
+  };
+  lid.addEventListener('click', open, { once: true }); lid.addEventListener('keydown', e => { if (e.key === 'Enter') open(); }, { once: true });
+}
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, pushNotice(), yesterdayBox(), heroBox(st));
+  add(main, hud(st), pushNotice(), yesterdayBox(), heroBox(st), feedBox());
   const editing = S.editing || (!st.off && !st.plan.length && !st.work);
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('button', { class: 'btn', onclick: () => { S.editing = true; put(S.today, { off: false }, true); } }, '休みを取り消して予定を申告する')));
   else add(main, editing && !st.sub ? planEditor() : planList(st));
   if (st.off && !editing) { add(main, questBox()); return; }
-  add(main, goalBox(st), questBox());
+  add(main, questBox());
   const used = k => st.ph[k] || st.h[k];
   const blocks = [[used('call') || st.han.all || st.han.inv, hanBox(st)], [used('post') || st.post, postBox(st)]];
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
