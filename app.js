@@ -326,7 +326,7 @@ function postForm(run, day, ev){
   const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q) || (a.grp || '').includes(q)).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.mine ? 'あなたの担当・' : a.on ? '配布済み・' : ''}${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
   flt.addEventListener('input', drawAreas); area.addEventListener('input', () => { if (area.value.trim()) { pick = ''; drawAreas(); } });
   drawAreas();
-  const num = el('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: '例：400' });
+  const num = el('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: '0', 'aria-label': '配った枚数' });
   const chips = el('div', { class: 'chips' });
   const drawChips = () => { chips.textContent = ''; POST_TY.forEach(t => add(chips, el('button', { type: 'button', 'aria-pressed': String(t === ty), onclick: () => { ty = t; store.set('postTy', t); drawChips(); } }, t))); };
   drawChips();
@@ -342,14 +342,16 @@ function postForm(run, day, ev){
   };
   const close = modal(run ? '配布の結果を入れて終了' : `配布の報告${day !== S.today ? '（' + md(day) + '）' : ''}`, [
     ev ? el('div', { class: 'muted', text: `予定：${ev.s}〜${ev.e}「${ev.t}」` }) : null,
-    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}の台帳の全${ar.list.length}エリア）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアが、ポスティング反響台帳にまだありません。下に入れてください。' })),
-    el('label', { class: 'field' }, ar.list.length ? 'リストにないエリア' : 'エリア（市区町村・町名）', area, dl),
-    el('label', { class: 'field' }, '配った枚数', num),
-    el('button', { class: 'btn primary wide', onclick: () => save(false) }, run ? '記録して終了する' : '記録する'),
-    run ? null : el('button', { class: 'btn wide', onclick: () => save(true) }, '記録して、別のエリアも入れる'),
-    el('button', { class: 'btn wide', onclick: () => close() }, run ? 'まだ続ける（閉じる）' : 'やめる')
+    el('div', { class: 'pf-step' }, el('div', { class: 'pf-h' }, el('span', { class: 'pf-n', text: '1' }), el('b', { text: '配ったエリア' }), el('small', { text: ar.per.length ? `${ar.per.map(p => p.label).join('・')}・全${ar.list.length}エリア` : '' })),
+      ar.list.length ? [flt, grid, el('details', { class: 'pf-other' }, el('summary', { text: 'リストにないエリアを入れる' }), area, dl)] : [el('div', { class: 'muted', text: 'この期間の配布エリアが台帳にまだありません。エリアを入れてください。' }), area, dl]),
+    el('div', { class: 'pf-step' }, el('div', { class: 'pf-h' }, el('span', { class: 'pf-n', text: '2' }), el('b', { text: '配った枚数' })),
+      el('div', { class: 'pf-num' }, num, el('span', { text: '枚' })),
+      el('div', { class: 'pf-q' }, [100, 300, 500, 1000].map(v => el('button', { type: 'button', onclick: () => { num.value = (parseInt(num.value, 10) || 0) + v; } }, `+${v}`)), el('button', { type: 'button', onclick: () => { num.value = ''; } }, 'クリア'))),
+    el('div', { class: 'pf-foot' },
+      el('button', { class: 'btn primary wide', onclick: () => save(false) }, run ? '記録して終了する' : '記録する'),
+      el('div', { class: 'row pf-sub' }, run ? null : el('button', { class: 'btn', onclick: () => save(true) }, '続けて別のエリア'), el('button', { class: 'btn', onclick: () => close() }, run ? 'まだ続ける' : 'やめる')))
   ]);
-  setTimeout(() => (pick ? num : ar.list.length ? flt : area).focus(), 50);
+  if (pick) setTimeout(() => num.focus(), 50);
 }
 // 「配布」と判定された予定を直す：配布ではない／配っていない
 function notPostForm(day, evs){
@@ -759,7 +761,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), salesCard(), coachCard(), pointCard(), memoCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
+  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), salesCard(), launcher(), heroBox(st), coachCard(), memoCard());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -863,11 +865,12 @@ function coachBlock(items, title){
 }
 function coachCard(){
   const items = analyze(myDays(), ME.id, { self: true });
-  if (!items.length) return null;
+  if (!items.length) items.push({ lv: 'info', title: 'これから分析します', fact: 'カレンダーの予定や記録がたまると、ここに分析が出ます。', ask: '予定は「訪販 ○○区」「配布 ○○市」のように中身が分かる名前で入れてください。' });
   const top = items.filter(i => i.lv === 'warn')[0] || items[0];
   const box = el('section', { class: 'coachc' }, el('div', { class: 'cc-h' }, el('b', { text: '活動分析とポイント' }), el('small', { text: `${+S.today.slice(4, 6)}月・カレンダーと記録から` })),
     el('div', { class: 'co ' + top.lv }, el('b', { text: top.title }), el('p', { text: top.fact }), el('p', { class: 'co-ask', text: top.ask })),
-    coachBlock(items.filter(i => i !== top), `ほかのポイント ${items.length - 1}件`));
+    items.length > 1 ? keepOpen('coachmore', coachBlock(items.filter(i => i !== top), `ほかの分析 ${items.length - 1}件`)) : null,
+    keepOpen('mypoint', el('details', { class: 'coach' }, el('summary', null, el('span', { text: `${ME.name}さんのポイント` }), el('small', { text: '今日の問い・今週の考え方' })), pointBody())));
   return box;
 }
 // ===== あなたのポイント：問いかけ・やりとりの確認・考え方（数字にからめて。記入はなし） =====
@@ -888,7 +891,7 @@ function pointFacts(){
   const topK = Object.entries(kind).sort((a, b) => b[1] - a[1])[0];
   return { c, pace, goal, left: last - passed, k, low, avg, topK, kindName: { door: '訪販', call: '反響対応', post: '配布', apo: 'アポ・商談', other: '事務・その他' } };
 }
-function pointCard(){
+function pointBody(){
   const f = pointFacts(); const n = dayNo(), wk = Math.floor((n + 3) / 7);
   // ① 今日の問い（数字があるものを優先）
   const qs = [];
@@ -915,8 +918,7 @@ function pointCard(){
     ['お客様の「次」まで考える', '獲得はゴールではなく、開通して初めて売上になります。工事日が決まるまで追いかけるのも、数字を作る仕事のうちです。']
   ];
   const a = ad[wk % ad.length];
-  return el('section', { class: 'pointc' },
-    el('div', { class: 'cc-h' }, el('b', { text: `${ME.name}さんのポイント` })),
+  return el('div', { class: 'pt-body' },
     el('div', { class: 'pt-q' }, el('small', { text: '今日の問い' }), el('p', { text: `${ME.name}さん、${q}` })),
     el('div', { class: 'pt-a' }, el('small', { text: '今週の考え方' }), el('b', { text: a[0] }), el('p', { text: a[1] })),
     el('details', { class: 'coach' }, el('summary', null, el('span', { text: '今週のやりとりの確認' }), el('small', { text: '3つ' })),
@@ -930,12 +932,12 @@ function allMemos(days){
 const memoTime = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
 function memoCard(){
   const list = allMemos(myDays());
-  const ta = el('textarea', { rows: 2, placeholder: '例：夕方の青葉区は在宅が多い／チラシの裏に料金比較を載せたら？／〇〇さんの話し方を真似する', 'aria-label': 'ひらめきメモ' });
+  const ta = el('textarea', { rows: 1, placeholder: '例：夕方の青葉区は在宅が多い／チラシの裏に料金比較を載せたら？／〇〇さんの話し方を真似する', 'aria-label': 'ひらめきメモ' });
   const save = () => { const x = ta.value.trim(); if (!x) { ta.focus(); return; } ta.value = ''; put(S.today, { memo: { [uid()]: { x, t: Date.now() } } }, true); toast('メモを残しました'); };
   return el('section', { class: 'memoc' },
     el('div', { class: 'cc-h' }, el('b', { text: 'ひらめきメモ' }), list.length ? el('button', { class: 'link', onclick: () => memoModal() }, `これまでのメモ ${list.length}件`) : null),
-    el('p', { class: 'mm-why', text: `いいアイデアは、机の前ではなく、移動中や現場でふと浮かびます。そして、そのほとんどは数時間で消えます。${ME.name}さんが思いついたその一瞬を、一行だけでいいので残してください。積み重なったメモは、あとで見返すと大きな結果につながるヒントの宝庫になります。` }),
-    ta, el('div', { class: 'row' }, el('button', { class: 'btn primary', onclick: save }, '残す')),
+    el('p', { class: 'mm-why', text: `いいアイデアは移動中や現場でふと浮かび、数時間で消えます。${ME.name}さんが思いついたその一瞬を、一行だけ残してください。積み重なったメモは、あとで見返すと大きな結果につながるヒントの宝庫になります。` }),
+    el('div', { class: 'mm-in' }, ta, el('button', { class: 'btn primary', onclick: save }, '残す')),
     list.length ? el('div', { class: 'mm-list' }, list.slice(0, 2).map(m => el('div', { class: 'mm' }, el('small', { text: memoTime(m.t) }), el('p', { text: m.x })))) : null);
 }
 function memoModal(){
@@ -992,7 +994,9 @@ const IC = {
   web: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/>',
   yen: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
   cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>',
-  map: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'
+  map: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  post: '<rect x="3" y="7" width="18" height="12" rx="2"/><path d="m3 9 9 6 9-6"/><path d="M8 3h8"/>',
+  call: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>'
 };
 const svgI = k => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '22'); s.setAttribute('height', '22'); s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.innerHTML = IC[k]; return s; };
 function launcher(){
@@ -1001,10 +1005,10 @@ function launcher(){
   const ym = S.today.slice(0, 4) + '-' + S.today.slice(4, 6); const m = (S.kh && S.kh.m && S.kh.m[ym]) || null;
   let wait = 0; const days = myDays(); Object.keys(days).filter(d => d >= S.today).forEach(d => { for (const id in (days[d].add || {})) if (days[d].add[id] && !days[d].add[id].st) wait++; });
   const ng = Object.keys(days).filter(d => d >= S.today).some(d => Object.values(days[d].add || {}).some(a => a && a.st === 'ng'));
-  return el('section', { class: 'launch', 'aria-label': 'すぐ使う' },
+  return el('section', { class: 'launch', 'aria-label': '申請・報告' },
     el('div', { class: 'ln-g' },
-      tile('form', '後確申込', FORM_KAKU), tile('web', 'WEB申込', FORM_WEB), tile('yen', '経費', KEIHI_FORM),
-      tile('cal', '予定登録', null, () => bulkForm()), tile('map', 'マップ', MAP_URL)),
+      tile('post', '配布報告', null, () => postForm(null)), tile('call', '反響対応', null, () => hanForm(null)), tile('cal', '予定登録', null, () => bulkForm()),
+      tile('form', '後確申込', FORM_KAKU), tile('web', 'WEB申込', FORM_WEB), tile('yen', '経費申請', KEIHI_FORM)),
     el('div', { class: 'ln-s' },
       el('button', { class: 'ln-chip', onclick: () => keihiModal() }, `${+S.today.slice(4, 6)}月の経費 `, el('b', { text: m ? yen(m.t) : '¥0' }), m && m.tate ? el('span', { text: `立替 ${yen(m.tate)}` }) : null, el('i', { text: '›' })),
       wait || ng ? el('button', { class: 'ln-chip' + (ng ? ' bad' : ''), onclick: () => addsModal() }, ng ? 'カレンダーに入らなかった予定' : 'カレンダー登録待ち ', wait ? el('b', { text: wait + '件' }) : null, el('i', { text: '›' })) : null));
