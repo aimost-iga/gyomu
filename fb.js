@@ -56,7 +56,7 @@ const day = {
   patch: patchDay, drop: dropDay,
   mine: async () => { try { return (await getDocs(query(collection(fs, 'day'), where('u', '==', ME.email)))).docs.map(x => x.data()); } catch (e) { return null; } },
   range: async (from, to) => {
-    if (!isStaff()) return [];
+    if (!isAdmin()) return [];
     try { return (await getDocs(query(collection(fs, 'day'), where('d', '>=', from), where('d', '<=', to)))).docs.map(x => x.data()); } catch (e) { return null; }
   }
 };
@@ -79,11 +79,11 @@ const people = {
 // スマホ通知の受け取り先と、通知の許可の状態
 const push = {
   save: async d => { try { await setDoc(ref('push/' + ukey(ME.email)), clean(Object.assign({ u: ME.email, at: Date.now() }, d)), { merge: true }); } catch (e) {} },
-  all: async () => { if (!isStaff()) return {}; try { const o = {}; (await getDocs(collection(fs, 'push'))).docs.forEach(x => { o[x.id] = x.data(); }); return o; } catch (e) { return {}; } }
+  all: async () => { if (!isAdmin()) return {}; try { const o = {}; (await getDocs(collection(fs, 'push'))).docs.forEach(x => { o[x.id] = x.data(); }); return o; } catch (e) { return {}; } }
 };
 // 自動のお知らせを送った回数（Apps Script が書く）
 const ntc = {
-  watch: (d, next) => isStaff() ? onSnapshot(ref('ntc/' + d), s => next(s.exists() ? s.data() : {}), () => next({})) : (next({}), () => {})
+  watch: (d, next) => isAdmin() ? onSnapshot(ref('ntc/' + d), s => next(s.exists() ? s.data() : {}), () => next({})) : (next({}), () => {})
 };
 
 async function resolveMe(u) {
