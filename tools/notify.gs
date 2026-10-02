@@ -70,7 +70,7 @@ function tick_(now) {
     const active = plans.length || ses.length;
     const due = [];
     if (!d.off) {
-      if (hhmm >= NT.plan && !active) due.push(['plan', '今日の予定がまだです', '連続記録が今日で途切れそう！予定を申告してください。休みなら「今日は休み」を押せばお知らせは止まります。']);
+      if (hhmm >= NT.plan && !active) due.push(['plan', '今日の予定がまだです', 'アプリを開いて、今日やることを申告してください。休みなら「今日は休み」を押せばお知らせは止まります。']);
       plans.forEach(p => {
         const st = at_(today, p.s), en = at_(today, p.e); if (!st || !en || d.sub) return;
         if (now.getTime() >= st.getTime() + NT.lateStart * 60000 && now < en && !running && !ses.some(s => s.pid === p.id))
@@ -82,7 +82,7 @@ function tick_(now) {
         const late = en ? now.getTime() >= en.getTime() + NT.lateEnd * 60000 : now.getTime() - running.st >= NT.longRun * 3600000;
         if (late) due.push(['end_' + running.id, `「${KIND_J[running.k] || ''}」の終了がまだです`, `${Utilities.formatDate(new Date(running.st), 'Asia/Tokyo', 'H:mm')}から続いています。終わっていたら「終了」を押して${running.k === 'call' || running.k === 'post' ? '結果を入れて' : ''}ください。`]);
       }
-      if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', 'ひとことでOK。出せば今日の点が確定して、連続記録が伸びます。']);
+      if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', '振り返りをひとこと書いて提出してください。1分で終わります。']);
     }
     const y = ydays[u.email];
     if (y && !y.off && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])

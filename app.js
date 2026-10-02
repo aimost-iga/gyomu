@@ -10,35 +10,11 @@ const KC = { door: 'var(--k-door)', call: 'var(--k-call)', post: 'var(--k-post)'
 const HAN = [['call', '電話した', ''], ['msg', 'メッセージだけ', '電話せず文字で対応'], ['conn', 'つながった', '話せた'], ['apo', 'アポ・提案', '提案まで進んだ'], ['inv', '無効', 'いたずら・対象外など'], ['got', '獲得', '申込まで']];
 const POST_TY = ['分譲', '賃貸', '混在'];
 const GOAL_DEF = { std: 6, door: 60, face: 10, call: 15, post: 500, got: 1, monthGot: 20 };
-const PT = { door: 1, face: 3, got: 30, call: 2, msg: 1, conn: 1, apo: 3, post100: 2 };
-const PT_TEXT = '訪問1・対面3・獲得30・反響の電話2・メッセージ1・つながった1・アポ3・配布100枚で2';
-const RANKS = [[0, '見習い'], [300, '駆け出し'], [800, '一人前'], [1500, '腕利き'], [2500, '達人'], [4000, '名人'], [6000, '伝説']];
 const FACE = ['fng', 'again', 'got'];
 const WEEK = '日月火水木金土';
 const MAP_URL = 'https://aimost-iga.github.io/houmon-map/';
 // スマホのお知らせの鍵（公開してよい鍵。設定画面で差し替え可）
 const VAPID = 'BL-8TMM-bqpyBIN-ASgKrLvFG2GN30s3M6I47dm1-L6kN0rDC8ZT31t9nYtV5EvxqkGzIxGpllxX3oE0LK9Uwuw';
-// 称号（取ると自分の画面に並ぶ）
-const TITLES = [
-  ['first', '一', 'はじめの一歩', '初めて日報を出す', a => a.subs >= 1],
-  ['s7', '7', '1週間皆勤', '7日連続で日報', a => a.bestStreak >= 7],
-  ['s30', '30', '鉄の意志', '30日連続で日報', a => a.bestStreak >= 30],
-  ['early', '朝', '朝イチ', '9時台までに開始 10日', a => a.early >= 10],
-  ['d100', '百', '100部屋', '累計訪問100', a => a.doors >= 100],
-  ['d1000', '千', '千部屋', '累計訪問1,000', a => a.doors >= 1000],
-  ['dd80', '走', '一日80部屋', '1日で訪問80', a => a.maxDoors >= 80],
-  ['f15', '顔', '対面の達人', '1日で対面15', a => a.maxFace >= 15],
-  ['g1', '初', '初獲得', '獲得1件', a => a.got >= 1],
-  ['gd3', '三', '1日3件', '1日で獲得3', a => a.maxGot >= 3],
-  ['gm10', '十', '月10件', '1か月で獲得10', a => a.maxMonthGot >= 10],
-  ['c100', '電', '電話番長', '反響の対応 累計100', a => a.han >= 100],
-  ['apo30', '提', '提案の鬼', 'アポ・提案 累計30', a => a.apo >= 30],
-  ['p10k', '紙', '一万枚', '配布 累計10,000枚', a => a.post >= 10000],
-  ['ok10', '的', 'お題ハンター', 'お題達成 10日', a => a.ok >= 10],
-  ['ok5', '連', '5連続達成', 'お題を5日連続で達成', a => a.bestOkRow >= 5],
-  ['best', '星', '自己ベスト', '自己最高の点を更新', a => a.bestUp >= 1]
-];
-
 // ---------- 小さな道具 ----------
 const $ = s => document.querySelector(s);
 const el = (tag, attrs, ...kids) => {
@@ -102,11 +78,10 @@ function statOf(doc, live, u){
   for (const id in (doc.post || {})) { const p = doc.post[id] || {}; post += +p.n || 0; postBy[p.ty || '混在'] = (postBy[p.ty || '混在'] || 0) + (+p.n || 0); }
   const got = v.got + han.got;
   const work = h.door + h.call + h.post + h.other;
-  const pts = (+doc.bonus || 0) + v.doors * PT.door + v.face * PT.face + got * PT.got + han.call * PT.call + han.msg * PT.msg + han.conn * PT.conn + han.apo * PT.apo + Math.floor(post / 100) * PT.post100;
   const plan = Object.entries(doc.plan || {}).map(([id, p]) => Object.assign({ id }, p)).sort((a, b) => (toMin(a.s) || 0) - (toMin(b.s) || 0));
   const ph = { door: 0, call: 0, post: 0, other: 0 };
   for (const p of plan) { const a = toMin(p.s), b = toMin(p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
-  return { h, work, running, first, v, han, post, postBy, got, pts, plan, ph, off: !!doc.off, sub: doc.sub || 0, has: !!(plan.length || work) };
+  return { h, work, running, first, v, han, post, postBy, got, plan, ph, off: !!doc.off, sub: doc.sub || 0, has: !!(plan.length || work) };
 }
 function targetsOf(st){
   const g = S.goal, out = [];
@@ -120,57 +95,27 @@ function targetsOf(st){
   return out;
 }
 const achieved = ts => ts.length > 0 && ts.every(t => t.val >= t.tgt);
-function rankOf(p){ let i = 0; for (let j = 0; j < RANKS.length; j++) if (p >= RANKS[j][0]) i = j; return { name: RANKS[i][1], base: RANKS[i][0], next: RANKS[i + 1] || null }; }
 function myDays(){
   const m = {}; for (const d of (S.mine || [])) if (d && d.d) m[d.d] = d;
   if (S.doc) m[S.today] = S.doc; if (S.ydoc) m[S.yday] = S.ydoc; if (S.tdoc) m[S.tmr] = S.tdoc;
   return m;
 }
 function sumRange(days, from, to, u){
-  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, pts: 0, days: 0, ok: 0, subs: 0, off: 0 };
+  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, days: 0, ok: 0, subs: 0, off: 0 };
   for (const d in days) {
     if (d < from || d > to) continue;
     const st = statOf(days[d], d === S.today, u);
     for (const k in t.h) t.h[k] += st.h[k];
     t.work += st.work; t.doors += st.v.doors; t.face += st.v.face; t.doorGot += st.v.got; t.got += st.got; t.post += st.post;
-    t.han += st.han.all; t.call += st.han.call; t.conn += st.han.conn; t.apo += st.han.apo; t.hgot += st.han.got; t.pts += st.pts;
+    t.han += st.han.all; t.call += st.han.call; t.conn += st.han.conn; t.apo += st.han.apo; t.hgot += st.han.got;
     if (st.work || st.v.doors) t.days++; if (st.sub) t.subs++; if (st.off) t.off++;
     if (achieved(targetsOf(st))) t.ok++;
   }
   return t;
 }
-const okDay = d => d && (d.sub || d.off);
-function streak(days){
-  let n = okDay(days[S.today]) ? 1 : 0;
-  for (let i = 1; i < 500; i++) { if (okDay(days[addDays(S.today, -i)])) n++; else break; }
-  return n;
-}
 const monthStart = s => s.slice(0, 6) + '01';
 function weekStart(s){ const d = toDate(s); return addDays(s, -((d.getDay() + 6) % 7)); }
 function lastMonthSame(s){ const d = toDate(s); const a = new Date(d.getFullYear(), d.getMonth() - 1, 1); const last = new Date(d.getFullYear(), d.getMonth(), 0).getDate(); return [ymd(a), ymd(new Date(d.getFullYear(), d.getMonth() - 1, Math.min(d.getDate(), last)))]; }
-// 称号の判定に使う、全期間のまとめ
-function lifetime(days){
-  const a = { subs: 0, bestStreak: 0, early: 0, doors: 0, maxDoors: 0, maxFace: 0, got: 0, maxGot: 0, maxMonthGot: 0, han: 0, apo: 0, post: 0, ok: 0, bestOkRow: 0, bestUp: 0 };
-  const ds = Object.keys(days).filter(d => d <= S.today).sort();
-  let run = 0, okRow = 0, prev = null, best = 0; const mg = {};
-  for (const d of ds) {
-    const doc = days[d], st = statOf(doc, d === S.today);
-    if (st.sub) a.subs++;
-    if (prev && addDays(prev, 1) !== d) run = 0;
-    run = okDay(doc) ? run + 1 : 0; a.bestStreak = Math.max(a.bestStreak, run);
-    if (st.first && new Date(st.first).getHours() < 10) a.early++;
-    a.doors += st.v.doors; a.maxDoors = Math.max(a.maxDoors, st.v.doors); a.maxFace = Math.max(a.maxFace, st.v.face);
-    a.got += st.got; a.maxGot = Math.max(a.maxGot, st.got); mg[d.slice(0, 6)] = (mg[d.slice(0, 6)] || 0) + st.got;
-    a.han += st.han.all; a.apo += st.han.apo; a.post += st.post;
-    const ok = achieved(targetsOf(st)); if (ok) a.ok++;
-    okRow = ok ? okRow + 1 : (st.off || !st.has ? okRow : 0); a.bestOkRow = Math.max(a.bestOkRow, okRow);
-    if (best > 0 && st.pts > best) a.bestUp++; best = Math.max(best, st.pts);
-    prev = d;
-  }
-  a.maxMonthGot = Math.max(0, ...Object.values(mg));
-  return a;
-}
-
 // ---------- 書き込み ----------
 function mergeLocal(cur, patch){
   const o = Object.assign({}, cur || {});
@@ -184,7 +129,6 @@ async function put(d, patch, quiet){
   rerender();
   try { await FB.day.patch(d, patch); }
   catch (e) { toast(e && e.code === 'permission-denied' ? '保存できませんでした。管理者に設定を確認してもらってください。' : '保存できませんでした。電波を確認してもう一度お試しください。'); }
-  if (!quiet) afterChange();
 }
 async function drop(d, field, id){
   const key = d === S.today ? 'doc' : d === S.yday ? 'ydoc' : null;
@@ -198,7 +142,6 @@ function startWork(k, pid){
   if (run) { if (run.k === 'call' || run.k === 'post') { toast(`先に「${KIND[run.k]}」を終了して、結果を入れてください`); stopWork(); return; } ses[run.id] = Object.assign({}, S.doc.ses[run.id], { en: now }); }
   const id = uid(); ses[id] = { k, st: now, en: null }; if (pid) ses[id].pid = pid;
   put(S.today, { ses, off: false }, true);
-  ding(1);
   toast(k === 'door' ? '訪販を開始しました。結果は訪問マップで登録してください' : `${KIND[k]}を開始しました。いってらっしゃい！`);
 }
 function endSession(extra){
@@ -282,48 +225,6 @@ function postForm(run){
   setTimeout(() => area.focus(), 50);
 }
 
-// ---------- お祝い ----------
-let actx = null;
-function ding(kind){
-  if (!store.get('sound', true)) return;
-  try {
-    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-    const notes = kind === 2 ? [523, 659, 784, 1047] : kind === 3 ? [784, 988, 1175, 1568] : [660, 880];
-    notes.forEach((f, i) => { const o = actx.createOscillator(), g = actx.createGain(); o.type = 'triangle'; o.frequency.value = f; o.connect(g); g.connect(actx.destination); const t = actx.currentTime + i * .11; g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.18, t + .02); g.gain.exponentialRampToValueAtTime(.0001, t + .35); o.start(t); o.stop(t + .4); });
-  } catch (e) {}
-}
-function confetti(){
-  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  const box = el('div', { class: 'confetti', 'aria-hidden': 'true' });
-  const cols = ['#1B1FA8', '#5CC2F2', '#1f9a55', '#c9920e', '#e0861c', '#d24a3a'];
-  for (let i = 0; i < 60; i++) { const s = el('i'); s.style.left = Math.random() * 100 + '%'; s.style.background = cols[i % cols.length]; s.style.animationDelay = Math.random() * .5 + 's'; s.style.animationDuration = 1.6 + Math.random() * 1.3 + 's'; add(box, s); }
-  document.body.append(box); setTimeout(() => box.remove(), 3500);
-}
-const cheerQ = [];
-function cheer(icon, title, sub, sound){ cheerQ.push([icon, title, sub, sound]); if (cheerQ.length === 1) nextCheer(); }
-function nextCheer(){
-  const c = cheerQ[0]; if (!c) return;
-  const o = el('div', { class: 'cheer', role: 'status' }, el('em', { text: c[0] }), el('b', { text: c[1] }), c[2] ? el('span', { text: c[2] }) : null);
-  document.body.append(o); confetti(); ding(c[3] || 2); try { navigator.vibrate && navigator.vibrate([30, 50, 30]); } catch (e) {}
-  setTimeout(() => o.classList.add('out'), 2300); setTimeout(() => { o.remove(); cheerQ.shift(); nextCheer(); }, 2750);
-}
-// 変化のあと：お題達成・新しい称号・階級アップ
-function afterChange(){
-  if (!S.doc || !S.mine) return;
-  const days = myDays();
-  const st = statOf(S.doc, true);
-  if (achieved(targetsOf(st)) && store.get('okDay', '') !== S.today) { store.set('okDay', S.today); cheer('🎯', '今日のお題 達成！', `${st.pts}点・この調子です`, 3); }
-  const life = lifetime(days);
-  const have = TITLES.filter(t => t[4](life)).map(t => t[0]);
-  const seen = store.get('titles', null);
-  if (seen === null) store.set('titles', have);
-  else { const nw = have.filter(x => !seen.includes(x)); if (nw.length) { store.set('titles', have); nw.forEach(id => { const t = TITLES.find(x => x[0] === id); cheer('🏅', `称号「${t[2]}」を獲得！`, t[3], 3); }); } }
-  const rk = rankOf(sumRange(days, monthStart(S.today), S.today).pts).name;
-  const lr = store.get('rank', null);
-  if (lr && lr.m === S.today.slice(0, 6) && lr.r !== rk && RANKS.findIndex(r => r[1] === rk) > RANKS.findIndex(r => r[1] === lr.r)) cheer('⬆', `階級アップ！「${rk}」`, '今月の点で上がりました', 3);
-  store.set('rank', { m: S.today.slice(0, 6), r: rk });
-}
-
 // ---------- 読み込み ----------
 function stopWatch(){ S.unsub.forEach(u => { try { u(); } catch (e) {} }); S.unsub = []; }
 function watch(){
@@ -333,15 +234,13 @@ function watch(){
   S.unsub.push(FB.day.watch(S.today, d => { S.doc = d; rerender(); }));
   S.unsub.push(FB.day.watch(S.yday, d => { S.ydoc = d; rerender(); }));
   S.unsub.push(FB.day.watch(S.tmr, d => { S.tdoc = d; rerender(); }));
-  S.unsub.push(FB.act.watchDay(S.today, docs => { S.acts = docs || []; rerender(); afterChange(); }));
+  S.unsub.push(FB.act.watchDay(S.today, docs => { S.acts = docs || []; rerender(); }));
   S.unsub.push(FB.cfg.watch('goal', d => { S.goal = Object.assign({}, GOAL_DEF, d || {}); rerender(); }));
-  S.unsub.push(FB.cfg.watch('quest', d => { S.quest = d && d.target ? d : null; S.qkey = ''; rerender(); }));
-  S.unsub.push(FB.cfg.watch('reward', d => { S.reward = d; rerender(); }));
   S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
   loadMine();
 }
-async function loadMine(){ const r = await FB.day.mine(); if (r) { S.mine = r; rerender(); afterChange(); } }
+async function loadMine(){ const r = await FB.day.mine(); if (r) { S.mine = r; rerender(); } }
 function periodRange(p){
   const t = S.today;
   if (p === 'today') return [t, t];
@@ -366,13 +265,6 @@ async function loadWeek(){
   if (!FB.isStaff() || S.week) return;
   S.week = []; await loadUsers();
   S.week = (await FB.day.range(weekStart(S.today), S.today)) || [];
-  rerender();
-}
-async function loadQuest(){
-  if (!S.quest || !FB.isStaff()) return;
-  const from = S.quest.period === 'month' ? monthStart(S.today) : weekStart(S.today);
-  if (S.qkey === from) return;
-  S.qkey = from; S.qteam = (await FB.day.range(from, S.today)) || [];
   rerender();
 }
 const nameOf = id => { const u = (S.users || []).find(x => x.email === id); return (u && u.name) || (id === ME.id ? ME.name : (id || '').split('@')[0]); };
@@ -409,8 +301,7 @@ function render(){
   const main = $('#main'); const keep = window.scrollY;
   main.textContent = '';
   const days = myDays();
-  const mp = sumRange(days, monthStart(S.today), S.today).pts;
-  $('#who').textContent = `${ME.name}・${rankOf(mp).name}・連続${streak(days)}日`;
+  $('#who').textContent = `${ME.name}　${md(S.today)}`;
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tab === S.tab)));
   if (S.tab === 'today') renderToday(main);
   else if (S.tab === 'stats') renderStats(main, days);
@@ -428,16 +319,16 @@ function heroBox(st){
     const r = st.running;
     add(box, el('div', { class: 'hk' }, el('span', { class: 'dot', style: `background:${KC[r.k]}` }), `${KIND[r.k]} 実行中`),
       el('div', { class: 'clock', 'data-st': r.st, text: clock(Date.now() - r.st) }),
-      el('div', { class: 'hsub', text: `${timeOf(r.st)} 開始・今日の合計 ${hm(st.work)}・${st.pts}点` }),
+      el('div', { class: 'hsub', text: `${timeOf(r.st)} 開始・今日の合計 ${hm(st.work)}` }),
       el('button', { class: 'btn big', onclick: stopWork }, r.k === 'call' || r.k === 'post' ? '終了して結果を入れる' : '終了する'),
       r.k === 'door' ? el('a', { class: 'btn big', style: 'background:transparent;color:#fff;border-color:rgba(255,255,255,.6)', href: MAP_URL }, '訪問マップを開く') : null);
     return box;
   }
-  if (st.off) { add(box, el('div', { class: 'hk', text: '今日は休み（申告済み）' }), el('div', { class: 'hsub', text: 'しっかり休んでください。連続記録は途切れません。' })); return box; }
-  if (st.sub) { add(box, el('div', { class: 'hk', text: '日報を提出しました。おつかれさまでした！' }), el('div', { class: 'hsub', text: `今日の合計 ${hm(st.work)}・${st.pts}点` })); return box; }
+  if (st.off) { add(box, el('div', { class: 'hk', text: '今日は休み（申告済み）' }), el('div', { class: 'hsub', text: 'お知らせは止まっています。しっかり休んでください。' })); return box; }
+  if (st.sub) { add(box, el('div', { class: 'hk', text: '日報を提出しました。おつかれさまでした！' }), el('div', { class: 'hsub', text: `今日の合計 ${hm(st.work)}` })); return box; }
   if (!st.plan.length && !st.work) { add(box, el('div', { class: 'hk', text: 'まず、今日やることを申告しましょう' }), el('div', { class: 'hsub', text: '申告するまで、お知らせが30分ごとに届きます。休みの日は「今日は休み」を。' })); return box; }
   const next = nextPlan(st);
-  add(box, el('div', { class: 'hk', text: st.work ? `今日の合計 ${hm(st.work)}・${st.pts}点` : '準備ができたら開始を押しましょう' }),
+  add(box, el('div', { class: 'hk', text: st.work ? `今日の合計 ${hm(st.work)}` : '準備ができたら開始を押しましょう' }),
     el('div', { class: 'hsub', text: next ? `次の予定：${next.s}〜${next.e} ${KIND[next.k]}${next.m ? '（' + next.m + '）' : ''}` : '予定はすべて終わりました。日報を出しましょう。' }),
     next ? el('button', { class: 'btn primary big', onclick: () => startWork(next.k, next.id) }, `${KIND[next.k]}を開始する`) : null);
   return box;
@@ -474,7 +365,7 @@ function planEditor(){
     S.draft = null; S.editing = false;
     await put(S.today, { plan, off: false }, true);
     for (const id of gone) await drop(S.today, 'plan', id);
-    ding(1); toast('今日の予定を申告しました。Googleカレンダーにも入ります');
+    toast('今日の予定を申告しました。Googleカレンダーにも入ります');
   } }, 'この予定で申告する'));
   add(sec, el('div', { class: 'row' },
     el('button', { class: 'btn', onclick: () => { if (confirm('今日は休みとして申告しますか？（今日のお知らせは止まります）')) { S.draft = null; S.editing = false; put(S.today, { off: true }, true); } } }, '今日は休み'),
@@ -497,27 +388,6 @@ function planList(st){
     el('div', { class: 'row', style: 'margin-top:8px' }, KIND_ORDER.map(k => el('button', { class: 'btn', onclick: () => { S.open.adhoc = false; startWork(k); } }, KIND[k]))))));
   return sec;
 }
-function goalBox(st){
-  const ts = targetsOf(st); if (!ts.length) return null;
-  const ok = achieved(ts);
-  return el('section', { class: 'card' + (ok ? ' ok' : '') }, el('h3', null, '今日のお題', ok ? el('span', { class: 'stamp', text: '達成' }) : el('small', { text: '全部そろうと達成' })),
-    ts.map(t => el('div', { class: 'bar' + (t.val >= t.tgt ? ' done' : '') },
-      el('div', { class: 'bl' }, el('span', { text: t.label }), el('b', { text: `${nf(t.val)} / ${nf(t.tgt)}` })),
-      el('div', { class: 'track' }, el('i', { style: `width:${Math.min(100, Math.round(t.val / t.tgt * 100))}%` })),
-      t.val < t.tgt ? el('small', { class: 'muted', text: `あと${nf(t.tgt - t.val)}` }) : null)),
-    el('div', { class: 'muted', text: '数は予定した時間に合わせて決まります。訪問・対面・訪販の獲得は、訪問マップの登録から自動で数えます。' }));
-}
-function questBox(){
-  if (!S.quest || !FB.isStaff()) return null;
-  loadQuest();
-  const q = S.quest; const from = q.period === 'month' ? monthStart(S.today) : weekStart(S.today);
-  let val = 0;
-  if (S.qteam) for (const r of byPerson(S.qteam, from, S.today)) val += ({ got: r.t.got, face: r.t.face, doors: r.t.doors, post: r.t.post, han: r.t.han, pts: r.t.pts })[q.kind] || 0;
-  const ok = val >= q.target;
-  return el('section', { class: 'card' + (ok ? ' ok' : '') }, el('h3', null, `チームお題：${q.title || ''}`, ok ? el('span', { class: 'stamp', text: '達成' }) : el('small', { text: q.period === 'month' ? '今月' : '今週' })),
-    el('div', { class: 'bar' + (ok ? ' done' : '') }, el('div', { class: 'bl' }, el('span', { text: 'みんなの合計' }), el('b', { text: `${nf(val)} / ${nf(q.target)}` })), el('div', { class: 'track' }, el('i', { style: `width:${Math.min(100, Math.round(val / q.target * 100))}%` }))),
-    q.reward ? el('div', { class: 'reward' }, '🎁', el('span', null, '達成のご褒美：', el('b', { text: q.reward }))) : null);
-}
 function hanBox(st){
   const list = Object.entries((S.doc && S.doc.han) || {}).sort((a, b) => a[1].t - b[1].t);
   const h = st.han;
@@ -536,7 +406,7 @@ function postBox(st){
 }
 function reportBox(st){
   const sec = el('section', { class: 'card' + (st.sub ? ' ok' : '') }, el('h3', null, '日報', st.sub ? el('span', { class: 'stamp', text: '提出済み' }) : el('small', { text: '出すまでお知らせが届きます' })));
-  add(sec, el('div', { class: 'kpis' }, [['稼働', h1(st.work) + 'h'], ['訪問', st.v.doors], ['対面', st.v.face], ['獲得', st.got], ['配布', nf(st.post)], ['反響対応', st.han.all], ['アポ', st.han.apo], ['今日の点', st.pts]].map(([t, v]) => el('div', { class: 'kpi' }, el('b', { text: v }), el('span', { text: t })))));
+  add(sec, el('div', { class: 'kpis k4' }, [['稼働', h1(st.work) + 'h'], ['訪問', st.v.doors], ['対面', st.v.face], ['獲得', st.got], ['反響対応', st.han.all], ['アポ', st.han.apo], ['配布', nf(st.post)], ['訪問/時', st.h.door > 600000 ? (st.v.doors / (st.h.door / 3600000)).toFixed(1) : '—']].map(([t, v]) => el('div', { class: 'kpi' }, el('b', { text: v }), el('span', { text: t })))));
   if (st.work) add(sec, el('div', { class: 'muted', text: KIND_ORDER.filter(k => st.h[k]).map(k => `${KIND[k]} ${hm(st.h[k])}`).join('・') + (st.h.door > 600000 ? `・訪販1時間あたり ${(st.v.doors / (st.h.door / 3600000)).toFixed(1)}部屋` : '') }));
   if (st.sub && !S.editRep) {
     if (S.doc.refl) add(sec, el('div', { class: 'ins' }, el('small', { class: 'muted', text: '振り返り　' }), S.doc.refl));
@@ -559,12 +429,7 @@ function reportBox(st){
       S.editRep = false; document.activeElement && document.activeElement.blur();
       if (off.checked !== !!(S.tdoc && S.tdoc.off)) put(S.tmr, { off: off.checked }, true);
       put(S.today, patch);
-      if (first) {
-        const days = myDays(); let best = 0; for (const d in days) if (d < S.today) best = Math.max(best, statOf(days[d], false).pts);
-        const pts = statOf(S.doc, true).pts;
-        cheer('📝', '日報 提出！', pts > best && best > 0 ? `今日は${pts}点・自己最高を更新！` : `今日は${pts}点・連続${streak(myDays())}日`, 2);
-        setTimeout(treasure, 2900);
-      } else toast('日報を直しました');
+      toast(first ? '日報を提出しました。おつかれさまでした' : '日報を直しました');
     } }, st.sub ? '直して保存' : '日報を提出する'));
   return sec;
 }
@@ -598,98 +463,68 @@ function pushNotice(){
     el('div', { class: 'muted', text: S.pushState === 'denied' ? 'お知らせが「許可しない」になっています。スマホの設定から、このアプリ（またはブラウザ）の通知を許可してください。通知を切っているかどうかは代表の画面に出ます。' : '予定や日報の出し忘れを、スマホに直接お知らせします。下のボタンを押して「許可」を選んでください。' }),
     S.pushState === 'denied' ? null : el('button', { class: 'btn primary', onclick: () => pushOn(true) }, 'お知らせを受け取る'));
 }
-// ===== スコアボード（今日の画面の一番上） =====
-const SVGNS = 'http://www.w3.org/2000/svg';
-function ring(val, tgt, size, stroke, label, sub, opts){
-  opts = opts || {};
-  const r = (size - stroke) / 2, c = 2 * Math.PI * r;
-  const p = opts.prog != null ? Math.min(1, opts.prog) : tgt ? Math.min(1, val / tgt) : 0;
-  const svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('viewBox', `0 0 ${size} ${size}`); svg.setAttribute('width', size); svg.setAttribute('height', size); svg.setAttribute('aria-hidden', 'true');
-  const mk = (cls, off) => { const ci = document.createElementNS(SVGNS, 'circle'); ci.setAttribute('cx', size / 2); ci.setAttribute('cy', size / 2); ci.setAttribute('r', r); ci.setAttribute('class', cls); ci.setAttribute('stroke-width', stroke); ci.setAttribute('stroke-dasharray', c.toFixed(1)); ci.setAttribute('stroke-dashoffset', off.toFixed(1)); return ci; };
-  svg.append(mk('rg-bg', 0));
-  const fg = mk('rg-fg' + (p >= 1 ? ' full' : ''), c); svg.append(fg);
-  requestAnimationFrame(() => requestAnimationFrame(() => fg.setAttribute('stroke-dashoffset', (c * (1 - p)).toFixed(1))));
-  const num = el('b', { class: 'rg-num', 'data-to': val, text: opts.anim ? '0' : nf(val) });
-  return el('div', { class: 'rg' + (p >= 1 ? ' done' : '') + (opts.near ? ' near' : ''), style: `--sz:${size}px`, role: 'img', 'aria-label': `${label} ${val}／${tgt}` },
-    svg, el('div', { class: 'rg-in' }, num, sub ? el('small', { text: sub }) : null), label ? el('span', { class: 'rg-lb', text: label }) : null);
+// ===== 今日の時間割（予定と実際を1本の線に重ねる） =====
+function dayline(st){
+  const plan = st.plan, ses = Object.entries((S.doc && S.doc.ses) || {}).map(([id, x]) => Object.assign({ id }, x));
+  const now = new Date(); const nowM = now.getHours() * 60 + now.getMinutes();
+  const base = toDate(S.today).getTime();
+  const mins = [8 * 60, 20 * 60, nowM];
+  plan.forEach(p => { const a = toMin(p.s), b = toMin(p.e); if (a != null) mins.push(a); if (b != null) mins.push(b); });
+  ses.forEach(x => { mins.push((x.st - base) / 60000); mins.push(((x.en || Date.now()) - base) / 60000); });
+  const from = Math.max(0, Math.floor(Math.min(...mins) / 60) * 60), to = Math.min(24 * 60, Math.ceil(Math.max(...mins) / 60) * 60);
+  const span = Math.max(60, to - from); const pos = m => ((m - from) / span * 100).toFixed(2) + '%'; const wid = (a, b) => (Math.max(0, b - a) / span * 100).toFixed(2) + '%';
+  const track = el('div', { class: 'dl-track' });
+  plan.forEach(p => { const a = toMin(p.s), b = toMin(p.e); if (a == null || b == null) return; add(track, el('i', { class: 'dl-plan', style: `left:${pos(a)};width:${wid(a, b)};--c:${KC[p.k]}`, title: `予定 ${p.s}〜${p.e} ${KIND[p.k]}` })); });
+  ses.forEach(x => { const a = (x.st - base) / 60000, b = ((x.en || Date.now()) - base) / 60000; add(track, el('i', { class: 'dl-act' + (x.en ? '' : ' live'), style: `left:${pos(a)};width:${wid(a, b)};--c:${KC[x.k]}`, title: `実際 ${timeOf(x.st)}〜${x.en ? timeOf(x.en) : '今'} ${KIND[x.k]}` })); });
+  if (nowM >= from && nowM <= to) add(track, el('b', { class: 'dl-now', style: `left:${pos(nowM)}` }));
+  const ticks = el('div', { class: 'dl-ticks' });
+  for (let m = from; m <= to; m += span > 600 ? 120 : 60) add(ticks, el('span', { style: `left:${pos(m)}`, text: String(m / 60) }));
+  const planned = Object.values(st.ph).reduce((a, b) => a + b, 0);
+  const legend = el('div', { class: 'dl-leg' }, KIND_ORDER.filter(k => st.ph[k] || st.h[k]).map(k => el('span', null, el('i', { style: `background:${KC[k]}` }), KIND[k])));
+  return el('section', { class: 'dayline', 'aria-label': '今日の予定と実際の時間' },
+    el('div', { class: 'dl-head' }, el('div', null, el('small', { text: '稼働' }), el('b', { text: hm(st.work) })), el('div', null, el('small', { text: '予定' }), el('b', { text: planned ? hm(planned) : '—' })),
+      el('div', null, el('small', { text: '予定に対して' }), el('b', { text: planned ? Math.round(st.work / planned * 100) + '%' : '—' }))),
+    track, ticks, legend);
 }
-function countUp(root){
-  root.querySelectorAll('.rg-num[data-to]').forEach(e => {
-    const to = +e.dataset.to; const from = +(store.get('lastPts', 0)); if (!to) { e.textContent = '0'; return; }
-    const st = performance.now(), dur = 900;
-    const f = t => { const k = Math.min(1, (t - st) / dur); const v = Math.round(from + (to - from) * (1 - Math.pow(1 - k, 3))); e.textContent = nf(v); if (k < 1) requestAnimationFrame(f); };
-    requestAnimationFrame(f);
-  });
+// 今日の数字（訪問マップと記録から自動）
+function metrics(st){
+  const ts = st.off ? [] : targetsOf(st); const tg = l => ts.find(t => t.label === l);
+  const cell = (label, val, t, sub) => el('div', { class: 'mt' + (t && t.val >= t.tgt ? ' hit' : '') },
+    el('small', { text: label }), el('b', { text: val }),
+    t ? el('div', { class: 'mt-bar' }, el('i', { style: `width:${Math.min(100, Math.round(t.val / t.tgt * 100))}%` })) : null,
+    el('span', { text: t ? `目標 ${nf(t.tgt)}` : sub || '' }));
+  return el('section', { class: 'metrics', 'aria-label': '今日の数字' },
+    cell('訪問', nf(st.v.doors), tg('訪問')), cell('対面', nf(st.v.face), tg('対面'), st.v.doors ? `対面率 ${Math.round(st.v.face / st.v.doors * 100)}%` : ''),
+    cell('獲得', nf(st.got), tg('獲得'), st.got ? `訪販${st.v.got}・反響${st.han.got}` : ''),
+    cell('反響対応', nf(st.han.all), tg('反響の対応'), st.han.all ? `アポ ${st.han.apo}` : ''), cell('配布', nf(st.post), tg('配布枚数'), ''));
 }
-function weekRank(){
-  if (!S.week || !FB.isStaff()) return null;
-  const rows = byPerson(S.week, weekStart(S.today), S.today).sort((a, b) => b.t.pts - a.t.pts);
-  const i = rows.findIndex(r => r.u === ME.id); if (i < 0) return null;
-  return { pos: i + 1, n: rows.length, gap: i > 0 ? rows[i - 1].t.pts - rows[i].t.pts + 1 : (rows[1] ? rows[0].t.pts - rows[1].t.pts : 0), above: i > 0 ? rows[i - 1].name : '' };
-}
-function hud(st){
-  if (FB.isStaff()) loadWeek();
-  const days = myDays(); const mp = sumRange(days, monthStart(S.today), S.today).pts; const rk = rankOf(mp); const sk = streak(days);
-  const ts = st.off ? [] : targetsOf(st);
-  const total = ts.length ? ts.reduce((a, t) => a + Math.min(1, t.val / t.tgt), 0) / ts.length : 0;
-  const near = ts.filter(t => t.val < t.tgt).sort((a, b) => (b.val / b.tgt) - (a.val / a.tgt))[0];
-  const hour = new Date().getHours();
-  const risk = !st.off && !st.sub && st.has && hour >= 19;
-  const wr = weekRank();
-  const lvP = rk.next ? Math.round((mp - rk.base) / (rk.next[0] - rk.base) * 100) : 100;
-  const box = el('section', { class: 'hud' },
-    el('div', { class: 'hud-top' },
-      el('div', { class: 'emb', title: '今月の階級' }, el('span', { text: rk.name })),
-      el('div', { class: 'who' }, el('b', { text: ME.name }), el('div', { class: 'lv' }, el('i', { style: `width:${Math.max(4, lvP)}%` })), el('small', { text: rk.next ? `「${rk.next[1]}」まで ${nf(rk.next[0] - mp)}点` : '最高の階級' })),
-      el('div', { class: 'flame' + (risk ? ' risk' : '') + (sk ? '' : ' out'), title: '連続記録' }, el('span', { class: 'fl', 'aria-hidden': 'true', text: '🔥' }), el('b', { text: sk }), el('small', { text: '日連続' }))),
-    el('div', { class: 'hud-main' },
-      ring(st.pts, 1, 168, 14, '', '今日の点', { anim: true, prog: ts.length ? total : (st.pts ? 1 : 0) }),
-      el('div', { class: 'quests' }, ts.length ? ts.slice(0, 4).map(t => ring(t.val, t.tgt, 66, 7, t.label, `/${nf(t.tgt)}`, { near: near && t === near && t.val / t.tgt >= .6 })) : el('div', { class: 'hud-empty', text: st.off ? '今日は休み' : '予定を申告すると、今日のお題が出ます' }))),
-    el('div', { class: 'hud-msg' + (risk ? ' risk' : '') }, risk ? `今日の日報がまだ。出さないと${sk}日の連続が途切れます` : near ? `あと${nf(near.tgt - near.val)}で「${near.label}」達成` : ts.length && achieved(ts) ? '今日のお題、全部達成！' : st.sub ? '今日もおつかれさまでした' : '今日も1点ずつ積み上げよう'),
-    wr ? el('div', { class: 'hud-rank' }, el('b', { text: `今週 ${wr.pos}位` }), el('span', { text: wr.pos === 1 ? (wr.gap > 0 ? `2位と${nf(wr.gap)}点差。逃げ切ろう` : '同点で並んでいます') : `${wr.above}さんまで あと${nf(wr.gap)}点` })) : null);
-  setTimeout(() => { countUp(box); store.set('lastPts', st.pts); }, 30);
-  return box;
-}
-// 仲間の動き（社員・代表だけ）：今日の獲得・日報・お題達成が流れてくる
+// アクティビティ（社員・代表だけ）：今日の獲得と日報
 function feedBox(){
   if (!FB.isStaff() || !S.week) return null;
   const ev = [];
-  for (const d of S.acts) for (const k in d) { const v = d[k]; if (v && v.r === 'got' && !v.x && v.t) ev.push([v.t, v.u, '訪販で獲得！', 'got']); }
-  for (const d of S.week) { if (d.d !== S.today) continue; for (const id in (d.han || {})) { const r = d.han[id]; if (r && +r.got > 0) ev.push([r.t, d.u, `反響で獲得${r.got > 1 ? r.got + '件' : ''}！`, 'got']); } if (d.sub) ev.push([d.sub, d.u, '日報を提出', 'sub']); }
+  for (const d of S.acts) for (const k in d) { const v = d[k]; if (v && v.r === 'got' && !v.x && v.t) ev.push([v.t, v.u, '訪販で獲得', 'got']); }
+  for (const d of S.week) { if (d.d !== S.today) continue; for (const id in (d.han || {})) { const r = d.han[id]; if (r && +r.got > 0) ev.push([r.t, d.u, `反響で獲得${r.got > 1 ? '×' + r.got : ''}`, 'got']); } if (d.sub) ev.push([d.sub, d.u, '日報を提出', 'sub']); }
   if (!ev.length) return null;
   ev.sort((a, b) => b[0] - a[0]);
-  return el('section', { class: 'feed', 'aria-label': '今日のみんなの動き' }, ev.slice(0, 6).map(([t, u, txt, k]) =>
-    el('div', { class: 'fd ' + k }, el('span', { class: 'av', text: (nameOf(u) || '?').slice(0, 1) }), el('span', { class: 'fx' }, el('b', { text: u === ME.id ? 'あなた' : nameOf(u) + 'さん' }), txt), el('small', { text: timeOf(t) }))));
-}
-// 日報を出したら開く宝箱：おまけの点（5〜50点、たまに大当たり）
-function treasure(){
-  if (!S.doc || S.doc.bonus != null) return;
-  const r = Math.random(); const b = r < .05 ? 50 : r < .2 ? 25 : r < .55 ? 15 : r < .85 ? 10 : 5;
-  const lid = el('div', { class: 'chest', role: 'button', tabindex: 0, 'aria-label': '宝箱を開ける' }, el('span', { class: 'cb-ic', text: '🎁' }), el('b', { text: '今日の宝箱' }), el('small', { text: '押して開ける' }));
-  const close = modal('おつかれさまでした', [lid, el('div', { class: 'muted', style: 'text-align:center', text: '日報を出した日だけ開けられます。中身は開けるまでわかりません。' })]);
-  const open = () => {
-    lid.classList.add('open'); lid.querySelector('.cb-ic').textContent = b >= 50 ? '💎' : b >= 25 ? '🏆' : '✨';
-    lid.querySelector('b').textContent = `+${b}点`; lid.querySelector('small').textContent = b >= 50 ? '大当たり！' : b >= 25 ? '当たり！' : 'おまけの点';
-    put(S.today, { bonus: b }); if (b >= 25) { confetti(); ding(3); } else ding(1);
-    try { navigator.vibrate && navigator.vibrate(b >= 25 ? [40, 60, 40, 60, 120] : 40); } catch (e) {}
-    setTimeout(close, 1800);
-  };
-  lid.addEventListener('click', open, { once: true }); lid.addEventListener('keydown', e => { if (e.key === 'Enter') open(); }, { once: true });
+  return el('section', { class: 'sec' }, el('h2', { class: 'sh', text: 'チームの動き' }),
+    el('div', { class: 'list' }, ev.slice(0, 5).map(([t, u, txt, k]) => el('div', { class: 'li fd ' + k }, el('span', { class: 'av', text: (nameOf(u) || '?').slice(0, 1) }), el('span', { class: 'fx' }, el('b', { text: u === ME.id ? 'あなた' : nameOf(u) }), txt), el('small', { text: timeOf(t) })))));
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, hud(st), pushNotice(), yesterdayBox(), heroBox(st), feedBox());
+  if (FB.isStaff()) loadWeek();
+  add(main, pushNotice(), yesterdayBox(), heroBox(st));
   const editing = S.editing || (!st.off && !st.plan.length && !st.work);
+  if (!st.off && (st.plan.length || st.work)) add(main, dayline(st), metrics(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('button', { class: 'btn', onclick: () => { S.editing = true; put(S.today, { off: false }, true); } }, '休みを取り消して予定を申告する')));
   else add(main, editing && !st.sub ? planEditor() : planList(st));
-  if (st.off && !editing) { add(main, questBox()); return; }
-  add(main, questBox());
+  if (st.off && !editing) return;
   const used = k => st.ph[k] || st.h[k];
   const blocks = [[used('call') || st.han.all || st.han.inv, hanBox(st)], [used('post') || st.post, postBox(st)]];
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
   if (st.plan.length || st.work) add(main, reportBox(st));
+  add(main, feedBox());
 }
 
 // ===== 成績 =====
@@ -724,7 +559,7 @@ function insights(days, cur, prev){
   }
   let none = 0;
   for (let d = monthStart(t); d < t; d = addDays(d, 1)) { const x = days[d]; if (!x || (!x.off && !(x.plan && Object.keys(x.plan).length) && !(x.ses && Object.keys(x.ses).length))) none++; }
-  if (none) out.push(['dn', `今月、予定も休みも申告がない日が${none}日あります。休みの日も「今日は休み」を押せば連続が途切れません。`]);
+  if (none) out.push(['dn', `今月、予定も休みも申告がない日が${none}日あります。休みの日は「今日は休み」を押しておきましょう。`]);
   const g = S.goal.monthGot;
   if (g) {
     const d0 = toDate(t); const left = new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate() - d0.getDate() + 1;
@@ -739,19 +574,11 @@ function renderStats(main, days){
   if (!S.mine) { add(main, el('div', { class: 'loading', text: '読み込んでいます…' })); return; }
   const t = S.today; const [pf, pt] = lastMonthSame(t);
   const cur = sumRange(days, monthStart(t), t), prev = sumRange(days, pf, pt);
-  const rk = rankOf(cur.pts);
-  let best = { pts: 0, d: '' }; for (const d in days) { if (d > t) continue; const p = statOf(days[d], d === t).pts; if (p > best.pts) best = { pts: p, d }; }
-  add(main, el('section', { class: 'card rank' },
-    el('div', { class: 'rk' }, el('span', { class: 'badge', text: rk.name }), el('b', { text: `${nf(cur.pts)}点` }), el('small', { class: 'muted', text: `${toDate(t).getMonth() + 1}月` })),
-    rk.next ? el('div', { class: 'bar' }, el('div', { class: 'track' }, el('i', { style: `width:${Math.min(100, Math.round((cur.pts - rk.base) / (rk.next[0] - rk.base) * 100))}%` })), el('small', { class: 'muted', text: `「${rk.next[1]}」まであと${nf(rk.next[0] - cur.pts)}点` })) : el('small', { class: 'muted', text: '最高の階級です！' }),
-    el('div', { class: 'mini' }, el('span', null, '連続 ', el('b', { text: streak(days) + '日' })), el('span', null, 'お題達成 ', el('b', { text: cur.ok + '日' })), best.d ? el('span', null, '自己最高 ', el('b', { text: best.pts + '点' }), `（${md(best.d)}）`) : null),
-    S.reward && S.reward.text ? el('div', { class: 'reward' }, '🎁', el('span', null, '今月のご褒美：', el('b', { text: S.reward.text }))) : null,
-    el('div', { class: 'muted', text: `点の付け方：${PT_TEXT}。階級は毎月1日に見習いから。休んでも点は減りません。` })));
+  const mon = toDate(t).getMonth() + 1;
+  const k0 = (label, v, p, fmt, sub) => el('div', { class: 'mt' }, el('small', { text: label }), el('b', { text: fmt ? fmt(v) : nf(v) }), +t.slice(6) < 3 ? el('span', { text: sub || '' }) : arrow(v, p));
+  add(main, el('section', { class: 'sec' }, el('h2', { class: 'sh' }, `${mon}月の数字`, el('small', { text: +t.slice(6) < 3 ? '3日目から先月と比べます' : '先月の同じ日までと比べて' })),
+    el('div', { class: 'metrics m6' }, k0('獲得', cur.got, prev.got), k0('訪問', cur.doors, prev.doors), k0('対面', cur.face, prev.face), k0('反響対応', cur.han, prev.han), k0('配布', cur.post, prev.post), k0('稼働', cur.work, prev.work, v => h1(v) + 'h'))));
   add(main, el('section', { class: 'card' }, el('h3', { text: '気づき' }), insights(days, cur, prev).map(([c, x]) => el('div', { class: 'ins ' + c, text: x }))));
-  const early = +t.slice(6) < 3;
-  const k = (label, v, p, fmt) => el('div', { class: 'kpi' }, el('b', { text: fmt ? fmt(v) : nf(v) }), el('span', { text: label }), early ? null : arrow(v, p));
-  add(main, el('section', { class: 'card' }, el('h3', null, '今月の数字', el('small', { text: early ? '3日目から先月と比べます' : '先月の同じ日までと比べて' })),
-    el('div', { class: 'kpis k3' }, k('稼働時間', cur.work, prev.work, v => h1(v) + 'h'), k('訪問', cur.doors, prev.doors), k('対面', cur.face, prev.face), k('獲得', cur.got, prev.got), k('配布枚数', cur.post, prev.post), k('反響対応', cur.han, prev.han))));
   const rate = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
   const per = (a, ms) => ms > 600000 ? (a / (ms / 3600000)).toFixed(1) : '—';
   add(main, el('section', { class: 'card' }, el('h3', { text: '自分の流れと生産性' }),
@@ -770,14 +597,10 @@ function renderStats(main, days){
     el('div', { class: 'muted', text: '自分の流れのどこで止まっているかが一目でわかります。' })));
   const d0 = toDate(t), last = new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
   const arr = []; let max = 1;
-  for (let i = 1; i <= last; i++) { const d = ymd(new Date(d0.getFullYear(), d0.getMonth(), i)); const st = d <= t ? statOf(days[d], d === t) : null; arr.push([d, st]); if (st) max = Math.max(max, st.pts); }
-  add(main, el('section', { class: 'card' }, el('h3', null, '日ごとの点', el('small', { text: '濃い色＝お題達成' })),
-    el('div', { class: 'chart', role: 'img', 'aria-label': '今月の日ごとの点' }, arr.map(([d, st]) => el('div', { class: 'col' + (d === t ? ' today' : ''), title: st ? `${md(d)} ${st.pts}点` : md(d) },
-      el('i', { class: st && achieved(targetsOf(st)) ? 'ok' : '', style: `height:${st && st.pts ? Math.max(3, Math.round(st.pts / max * 100)) : 0}%` }), el('span', { text: st && st.off ? '休' : String(+d.slice(6)) }))))));
-  const life = lifetime(days);
-  const got = TITLES.filter(x => x[4](life)).length;
-  add(main, el('section', { class: 'card' }, el('h3', null, '称号', el('small', { text: `${got} / ${TITLES.length}` })),
-    el('div', { class: 'titles' }, TITLES.map(x => { const ok = x[4](life); return el('div', { class: 'tt' + (ok ? '' : ' lock') }, el('i', { text: ok ? x[1] : '？' }), el('b', { text: x[2] }), el('small', { text: x[3] })); }))));
+  for (let i = 1; i <= last; i++) { const d = ymd(new Date(d0.getFullYear(), d0.getMonth(), i)); const st = d <= t ? statOf(days[d], d === t) : null; arr.push([d, st]); if (st) max = Math.max(max, st.v.doors + st.han.all); }
+  add(main, el('section', { class: 'sec' }, el('h2', { class: 'sh' }, '日ごとの活動', el('small', { text: '棒＝訪問＋反響対応、点＝獲得' })),
+    el('div', { class: 'chart', role: 'img', 'aria-label': '今月の日ごとの活動量と獲得' }, arr.map(([d, st]) => { const v = st ? st.v.doors + st.han.all : 0; return el('div', { class: 'col' + (d === t ? ' today' : ''), title: st ? `${md(d)} 訪問${st.v.doors}・反響${st.han.all}・獲得${st.got}` : md(d) },
+      st && st.got ? el('em', { text: st.got > 1 ? st.got : '' }) : null, el('i', { style: `height:${v ? Math.max(3, Math.round(v / max * 100)) : 0}%` }), el('span', { text: st && st.off ? '休' : String(+d.slice(6)) })); }))));
 }
 
 // ===== チーム =====
@@ -786,16 +609,6 @@ const stCls = s => /中$/.test(s) && s !== '中断中' ? 'run' : s === '未申�
 const PUSH_T = { granted: ['受信中', 'good'], novapid: ['受信中', 'good'], denied: ['切っている', 'bad'], default: ['未設定', 'warn'], needhome: ['ホーム未追加', 'warn'], unsupported: ['メールのみ', ''] };
 function renderTeam(main){
   if (!FB.isStaff()) { go('today'); return; }
-  loadWeek();
-  // 週の順位
-  if (S.week) {
-    const rows = byPerson(S.week, weekStart(S.today), S.today).sort((a, b) => b.t.pts - a.t.pts);
-    add(main, el('section', { class: 'card' }, el('h3', null, '今週の順位', el('small', { text: `${md(weekStart(S.today))}〜` })),
-      el('div', { class: 'ladder' }, rows.map((r, i) => el('div', { class: 'lrow' + (r.u === ME.id ? ' me' : '') }, el('span', { class: 'pos', text: i + 1 }),
-        el('div', { class: 'lb' }, el('b', { text: r.name }), el('small', { text: `訪問${r.t.doors}・対面${r.t.face}・獲得${r.t.got}・反響${r.t.han}・配布${nf(r.t.post)}` })), el('b', { text: nf(r.t.pts) })))),
-      el('div', { class: 'muted', text: '毎週月曜にまた0から。' })));
-  }
-  add(main, questBox());
   // 一覧
   const sel = el('select', { onchange: e => { S.period = e.target.value; loadTeam(true); } }, [['today', '今日'], ['yday', '昨日'], ['week', '今週'], ['month', '今月'], ['last', '先月']].map(([v, t]) => el('option', { value: v, selected: v === S.period }, t)));
   const sec = el('section', { class: 'card' }, el('h3', null, 'みんなの状況', el('span', { class: 'row' }, sel, el('button', { class: 'btn', onclick: () => loadTeam(true) }, '更新'))));
@@ -803,18 +616,18 @@ function renderTeam(main){
   if (!S.team) { loadTeam(); add(sec, el('div', { class: 'muted', text: '読み込み中…' })); }
   else {
     const [from, to] = periodRange(S.period); const one = from === to; const isToday = one && from === S.today;
-    const rows = byPerson(S.team, from, to).sort((a, b) => b.t.pts - a.t.pts);
+    const rows = byPerson(S.team, from, to).sort((a, b) => b.t.got - a.t.got || b.t.doors - a.t.doors || b.t.han - a.t.han);
     const nts = u => { const n = S.ntc[FB.ukey(u)] || {}; return n.total || 0; };
     add(sec, el('div', { class: 'tw' }, el('table', { class: 'tbl team' },
-      el('thead', null, el('tr', null, ['名前', one ? '状態' : '日報', '稼働', '訪問', '対面', '獲得', '反響', 'アポ', '配布', '訪問/時', '点', isToday ? '催促' : null, 'お知らせ'].filter(Boolean).map(h => el('th', { text: h })))),
+      el('thead', null, el('tr', null, ['名前', one ? '状態' : '日報', '獲得', '訪問', '対面', '反響', 'アポ', '配布', '稼働', '訪問/時', isToday ? '催促' : null, 'お知らせ'].filter(Boolean).map(h => el('th', { text: h })))),
       el('tbody', null, rows.map(r => {
         const st = one ? statOf(r.days[from], from === S.today, r.u) : null;
         const s = one ? stateOf(st, isToday) || (st.off ? '休み' : st.sub ? '日報済み' : st.has ? '日報なし' : '申告なし') : `${r.t.subs}日`;
         const p = (S.pushAll || {})[FB.ukey(r.u)]; const pt = PUSH_T[(p && p.perm) || 'default'] || PUSH_T.default;
         const cls = one ? (stCls(s) || (s === '日報なし' || s === '申告なし' ? 'bad' : '')) : '';
         return el('tr', null, el('th', { text: r.name }), el('td', null, el('span', { class: 'st ' + cls, text: s })),
-          el('td', { text: h1(r.t.work) + 'h' }), el('td', { text: r.t.doors }), el('td', { text: r.t.face }), el('td', { text: r.t.got }), el('td', { text: r.t.han }), el('td', { text: r.t.apo }), el('td', { text: nf(r.t.post) }),
-          el('td', { text: r.t.h.door > 600000 ? (r.t.doors / (r.t.h.door / 3600000)).toFixed(1) : '—' }), el('td', null, el('b', { text: nf(r.t.pts) })),
+          el('td', null, el('b', { text: r.t.got })), el('td', { text: r.t.doors }), el('td', { text: r.t.face }), el('td', { text: r.t.han }), el('td', { text: r.t.apo }), el('td', { text: nf(r.t.post) }),
+          el('td', { text: h1(r.t.work) + 'h' }), el('td', { text: r.t.h.door > 600000 ? (r.t.doors / (r.t.h.door / 3600000)).toFixed(1) : '—' }),
           isToday ? el('td', null, nts(r.u) ? el('span', { class: 'st ' + (nts(r.u) >= 3 ? 'bad' : 'warn'), text: `${nts(r.u)}回` }) : '—') : null,
           el('td', null, el('span', { class: 'st ' + pt[1], text: pt[0] })));
       })))));
@@ -825,27 +638,11 @@ function renderTeam(main){
   if (FB.isAdmin()) add(main, adminGame());
 }
 function adminGame(){
-  const g = S.goal, q = S.quest || { title: '', kind: 'got', target: 10, period: 'week', reward: '' }, rw = S.reward || {};
-  const inp = {}; const num = (k, v, step) => (inp[k] = el('input', { type: 'number', min: 0, step: step || 1, value: v }));
-  const qt = el('input', { type: 'text', value: q.title || '', placeholder: '例：今週チームで獲得10件' });
-  const qk = el('select', null, [['got', '獲得'], ['face', '対面'], ['doors', '訪問'], ['han', '反響対応'], ['post', '配布枚数'], ['pts', '点']].map(([v, t]) => el('option', { value: v, selected: v === q.kind }, t)));
-  const qn = el('input', { type: 'number', min: 1, value: q.target || 10 });
-  const qp = el('select', null, [['week', '今週'], ['month', '今月']].map(([v, t]) => el('option', { value: v, selected: v === q.period }, t)));
-  const qr = el('input', { type: 'text', value: q.reward || '', placeholder: '例：みんなで焼肉' });
-  const rt = el('input', { type: 'text', value: rw.text || '', placeholder: '例：今月の1位にAmazonギフト5,000円' });
-  return keepOpen('admin', el('details', { class: 'card' }, el('summary', { text: 'お題・チームお題・ご褒美を決める（代表）' }),
-    el('h3', { text: '1日のお題の基準', style: 'margin:8px 0 0;font-size:14px' }),
-    el('div', { class: 'muted', text: '「1日＝基準の時間」働いたときの数です。予定が短い日はその分少なくなります。' }),
-    [['std', '基準の時間（時間）', .5], ['door', '訪販：訪問数'], ['face', '訪販：対面数'], ['call', '反響対応：対応数'], ['post', '配布：枚数', 10], ['got', '獲得数'], ['monthGot', '1か月の獲得の目安']].map(([k, l, s]) => el('label', { class: 'gf' }, l, num(k, g[k], s))),
-    el('button', { class: 'btn primary', onclick: async () => { const d = {}; for (const k in inp) { const v = parseFloat(inp[k].value); d[k] = isFinite(v) && v >= 0 ? v : GOAL_DEF[k]; } try { await FB.cfg.set('goal', d); toast('お題の基準を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, 'お題の基準を保存'),
-    el('h3', { text: 'チームお題', style: 'margin:14px 0 0;font-size:14px' }),
-    el('label', { class: 'field' }, 'お題の名前', qt), el('div', { class: 'row' }, el('label', { class: 'field', style: 'flex:1' }, '数えるもの', qk), el('label', { class: 'field', style: 'flex:1' }, '目標', qn), el('label', { class: 'field', style: 'flex:1' }, '期間', qp)),
-    el('label', { class: 'field' }, '達成のご褒美', qr),
-    el('div', { class: 'row' }, el('button', { class: 'btn primary', onclick: async () => { const n = parseInt(qn.value, 10); if (!(n > 0)) { toast('目標の数を入れてください'); return; } try { await FB.cfg.set('quest', { title: qt.value.trim(), kind: qk.value, target: n, period: qp.value, reward: qr.value.trim() }); toast('チームお題を出しました'); } catch (e) { toast('保存できませんでした'); } } }, 'チームお題を出す'),
-      S.quest ? el('button', { class: 'btn', onclick: async () => { try { await FB.cfg.set('quest', { target: 0 }); toast('チームお題を終わりにしました'); } catch (e) {} } }, '終わりにする') : null),
-    el('h3', { text: '今月のご褒美', style: 'margin:14px 0 0;font-size:14px' }),
-    el('label', { class: 'field' }, '成績画面に出す文', rt),
-    el('button', { class: 'btn primary', onclick: async () => { try { await FB.cfg.set('reward', { text: rt.value.trim() }); toast('ご褒美を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, 'ご褒美を保存')));
+  const g = S.goal; const inp = {}; const num = (k, v, step) => (inp[k] = el('input', { type: 'number', min: 0, step: step || 1, value: v }));
+  return keepOpen('admin', el('details', { class: 'card' }, el('summary', { text: '1日の目標の基準（代表）' }),
+    el('div', { class: 'muted', text: '「1日＝基準の時間」働いたときの目標です。予定が短い日はその分少なくなります。' }),
+    [['std', '基準の時間（時間）', .5], ['door', '訪販：訪問数'], ['face', '訪販：対面数'], ['call', '反響対応：対応数'], ['post', '配布：枚数', 10], ['got', '獲得数'], ['monthGot', '1か月の獲得の目安']].map(([k, l, st]) => el('label', { class: 'gf' }, l, num(k, g[k], st))),
+    el('button', { class: 'btn primary', onclick: async () => { const d = {}; for (const k in inp) { const v = parseFloat(inp[k].value); d[k] = isFinite(v) && v >= 0 ? v : GOAL_DEF[k]; } try { await FB.cfg.set('goal', d); toast('目標の基準を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, '保存する')));
 }
 
 // ===== 設定 =====
@@ -864,7 +661,7 @@ function renderSet(main){
   const offs = Object.keys(days).filter(d => d >= S.today && days[d].off).sort();
   const di = el('input', { type: 'date', min: `${S.today.slice(0, 4)}-${S.today.slice(4, 6)}-${S.today.slice(6)}` });
   add(main, el('section', { class: 'card' }, el('h3', { text: '休みの予定' }),
-    el('div', { class: 'muted', text: '先に入れておくと、その日はお知らせが届かず、連続記録も途切れません。' }),
+    el('div', { class: 'muted', text: '先に入れておくと、その日はお知らせが届きません。' }),
     el('div', { class: 'row' }, di, el('button', { class: 'btn primary', onclick: () => { const d = di.value.replace(/-/g, ''); if (d.length !== 8 || d < S.today) { toast('今日以降の日を選んでください'); return; } put(d, { off: true }, true); toast(`${md(d)}を休みにしました`); } }, 'この日を休みにする')),
     offs.length ? offs.map(d => el('div', { class: 'rec' }, el('div', { class: 'rt', text: md(d) }), el('button', { class: 'btn', onclick: () => put(d, { off: false }, true) }, '取り消す'))) : el('div', { class: 'muted', text: '入っている休みはありません。' })));
   const snd = el('input', { type: 'checkbox', id: 'snd', checked: store.get('sound', true), onchange: e => store.set('sound', e.target.checked) });
@@ -924,14 +721,14 @@ async function pushOn(ask){
 }
 let pushTried = '';
 function pushAuto(){ const k = (S.appcfg && S.appcfg.vapid) || VAPID; if (pushTried === k) return; pushTried = k; pushOn(false); }
-window.addEventListener('push-in', e => { const d = e.detail || {}; toast(`${d.title || 'お知らせ'}：${d.body || ''}`); ding(1); });
+window.addEventListener('push-in', e => { const d = e.detail || {}; toast(`${d.title || 'お知らせ'}：${d.body || ''}`); });
 
 // ---------- 起動 ----------
 function go(tab){ S.tab = tab; store.set('tab', tab); if (tab === 'team') { S.week = null; loadTeam(); } if (tab === 'stats' && !S.mine) loadMine(); render(); window.scrollTo(0, 0); }
 document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => go(b.dataset.tab)));
 setInterval(() => {
   document.querySelectorAll('.clock[data-st]').forEach(e => { e.textContent = clock(Date.now() - +e.dataset.st); });
-  if (FB && ME && S.today && ymd(Date.now()) !== S.today) { S.draft = null; S.editing = false; S.qkey = ''; S.week = null; watch(); }
+  if (FB && ME && S.today && ymd(Date.now()) !== S.today) { S.draft = null; S.editing = false; S.week = null; watch(); }
 }, 1000);
 setInterval(() => { if (S.doc && Object.values(S.doc.ses || {}).some(s => !s.en)) rerender(); }, 60000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) { if (S.tab === 'team') loadTeam(true); rerender(); } });
@@ -956,5 +753,5 @@ async function boot(){
   if (S.tab === 'team') loadTeam();
 }
 boot().catch(e => { console.error(e); $('#main').textContent = '読み込めませんでした。開き直してください。'; });
-window.GY = { S, statOf, targetsOf, lifetime, render };
+window.GY = { S, statOf, targetsOf, render };
 })();
