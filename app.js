@@ -759,7 +759,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), salesCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
+  add(main, greet(st), salesCard(), coachCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -777,6 +777,98 @@ function renderToday(main){
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: '予定にない記録' }), el('small', { text: '反響対応・配布' })), rest)));
+}
+// ===== 分析とアドバイス（カレンダーと実際の記録から。事実だけを冷静に） =====
+// 比べるもの：①法律で決まった1日8時間・週40時間 ②会社の目標の基準（管理の画面で変更） ③自分の先月の同じ時期 ④台帳の全エリアの平均反響率
+const LAW_DAY = 8;
+function analyze(days, u, opt){
+  opt = opt || {};
+  const to = opt.to || S.today, from = opt.from || monthStart(to);
+  const g = S.goal || GOAL_DEF; const out = [];
+  const tip = (lv, title, fact, ask) => out.push({ lv, title, fact, ask });
+  let planMs = 0, planDays = 0, workMs = 0, workDays = 0, emptyWd = 0, rough = 0, gapMs = 0, gapDays = 0, starts = [], kind = { door: 0, call: 0, post: 0, apo: 0, other: 0 };
+  let doors = 0, face = 0, doorMs = 0, got = 0, han = 0, postN = 0, postMs = 0, batchDays = 0, wd = 0;
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const doc = days[d]; const dow = toDate(d).getDay(); const weekday = dow > 0 && dow < 6;
+    const off = doc && (doc.off || (doc.cal && doc.cal.off));
+    if (weekday && !off && d < S.today) wd++;
+    const ev = calEv(doc).filter(e => !e.wait);
+    if (ev.length) {
+      planDays++; let mins = [];
+      ev.forEach(e => { const a = toMin(e.s), b = toMin(e.e === '24:00' ? '23:59' : e.e); if (a == null || b == null || b <= a) return; planMs += (b - a) * 60000; kind[e.k] = (kind[e.k] || 0) + (b - a) * 60000; mins.push([a, b]); });
+      if (ev.length === 1 && mins[0] && mins[0][1] - mins[0][0] >= 360) rough++;
+      mins.sort((x, y) => x[0] - y[0]); if (mins.length) starts.push(mins[0][0]);
+      let gm = 0; for (let i = 1; i < mins.length; i++) { const gap = mins[i][0] - Math.max(...mins.slice(0, i).map(m => m[1])); if (gap >= 90) gm += gap; }
+      if (gm) { gapMs += gm * 60000; gapDays++; }
+    } else if (weekday && !off && d < S.today && d >= START) emptyWd++;
+    if (doc && d <= S.today) { const st = statOf(doc, d === S.today, u); if (st.work > 0) { workMs += st.work; workDays++; } doors += st.v.doors; face += st.v.face; doorMs += st.h.door; got += st.got; han += st.han.all; postN += st.post; postMs += st.ph.post || 0; if (st.batchRun >= 5) batchDays++; }
+  }
+  const avgPlan = planDays ? planMs / planDays / 3600000 : 0, avgWork = workDays ? workMs / workDays / 3600000 : 0;
+  // 1. 予定の量
+  if (planDays) {
+    const lv = avgPlan < 5 ? 'warn' : avgPlan >= 7 ? 'good' : 'info';
+    tip(lv, '1日の予定の量', `予定のある日は${planDays}日、1日平均${avgPlan.toFixed(1)}時間。法律で決まった1日の労働時間は${LAW_DAY}時間です。`,
+      avgPlan < 5 ? '移動や準備の時間も予定に入れていますか？ 入れていないなら入れる、本当に少ないなら1日の組み方を見直してみましょう。' : avgPlan >= 7 ? '十分な量です。次は中身（成果の出る時間帯に、成果の出る仕事を置けているか）を見ましょう。' : 'あと1〜2時間、成果につながる仕事（訪販・反響対応）を足せないか考えてみましょう。');
+  }
+  // 2. 予定に対する実際
+  if (planDays && workDays) {
+    const rate = workMs / Math.max(1, planMs * Math.min(1, workDays / planDays));
+    tip(rate < .7 ? 'warn' : 'info', '予定に対して実際に動いた時間', `実際に動いた日は1日平均${avgWork.toFixed(1)}時間（${workDays}日）。予定に対しておよそ${Math.round(Math.min(rate, 1.5) * 100)}%です。`,
+      rate < .7 ? '予定と実際のずれが大きいです。予定が多すぎるのか、途中で止まっているのか、どちらか確かめてみましょう。' : '予定どおりに動けています。');
+  }
+  // 3. 予定も休みもない平日
+  if (emptyWd) tip('warn', '予定も休みも入っていない平日', `${emptyWd}日あります。`, '休みならカレンダーに「休み」、仕事ならその日の予定を入れましょう。記録がない日は、何もしていない日と同じに見えてしまいます。');
+  // 4. 中身の分からない大きな予定
+  if (rough) tip('info', '中身が分からない大きな予定', `1日に6時間以上の予定が1つだけの日が${rough}日あります。`, '「訪販 青葉区」「反響」「配布 八潮市」のように分けて入れると、どこに時間を使ったかが見えて、自分でも改善しやすくなります。');
+  // 5. 空き時間
+  if (gapDays) tip(gapMs / gapDays / 3600000 >= 2 ? 'warn' : 'info', '予定と予定のあいだの空き時間', `1時間半以上の空きがある日が${gapDays}日、合計${h1(gapMs)}時間です。`, '移動・休憩・待ち時間のどれでしょう？ 移動ならエリアの順番、待ちなら反響対応や配布を入れられないか確認してみましょう。');
+  // 6. 仕事の中身の割合
+  const tot = Object.values(kind).reduce((a, b) => a + b, 0);
+  if (tot) {
+    const pct = k => Math.round((kind[k] || 0) / tot * 100);
+    const earn = pct('door') + pct('call') + pct('apo');
+    tip(pct('other') >= 30 ? 'warn' : 'info', '時間の使い方の内訳', `訪販${pct('door')}%・反響${pct('call')}%・アポ${pct('apo')}%・配布${pct('post')}%・その他${pct('other')}%。お客様と話す仕事（訪販・反響・アポ）は${earn}%です。`,
+      pct('other') >= 30 ? '「その他」（事務・移動・中身の分からない予定）が多めです。まとめてできる事務や、なくせる作業がないか確認してみましょう。' : earn < 50 ? '獲得につながるのはお客様と話す時間です。半分以上をそこに使えると、数字が変わりやすくなります。' : 'お客様と話す時間がしっかり取れています。');
+  }
+  // 7. 始める時間
+  if (starts.length >= 3) { const avg = starts.reduce((a, b) => a + b, 0) / starts.length; const hh = Math.floor(avg / 60), mm = Math.round(avg % 60);
+    tip(avg >= 11 * 60 ? 'warn' : 'info', '1日の始まり', `最初の予定は平均${hh}時${pad(mm)}分。`, avg >= 11 * 60 ? '午前中が空きがちです。平日の日中は不在が多い時間帯なので、配布や事務を午前〜昼、訪販を夕方以降に寄せるなど、時間帯で仕事を分けてみましょう。' : '朝から動けています。'); }
+  // 8. 訪販の効率
+  if (doorMs > 3600000) { const ph = doors / (doorMs / 3600000), base = (g.door || 60) / (g.std || 6), fr = doors ? face / doors : 0;
+    tip(ph < base * .8 ? 'warn' : 'good', '訪販の効率', `1時間あたり${ph.toFixed(1)}部屋（会社の基準 ${base.toFixed(1)}部屋）、対面率${Math.round(fr * 100)}%。`,
+      ph < base * .8 ? '訪問の数が基準より少なめです。建物の回る順番や、1部屋にかける時間を見直してみましょう。' : fr < .15 ? '数は回れています。不在が多いなら、訪問する時間帯（夕方〜夜）を変えると対面が増えやすいです。' : '数も対面も取れています。対面からの獲得（話し方・提案）を磨く段階です。'); }
+  if (batchDays) tip('warn', '訪問マップのまとめ入力', `あとからまとめて登録したとみられる日が${batchDays}日あります。`, 'その場で登録すると、どの時間帯に会えたかが分かり、次に回る時間の作戦が立てられます。');
+  // 9. 配布の効率
+  if (postN && postMs > 1800000) tip('info', '配布の効率', `配布は1時間あたりおよそ${Math.round(postN / (postMs / 3600000))}枚（予定の時間で計算）。`, '同じエリアで続けて配る、配る順番を地図で決めておくなどで枚数は伸ばせます。');
+  // 10. 成果と先月比べ
+  if (workMs > 10 * 3600000) tip(got ? 'good' : 'warn', '成果', `この期間の獲得は${got}件、動いた${h1(workMs)}時間あたり${(got / (workMs / 36000000)).toFixed(1)}件／10時間。反響対応${han}件。`, got ? '獲得までの流れ（どこで・いつ・どう話して取れたか）を言葉にして、毎回同じようにできる形にしましょう。' : '動いた時間に対して獲得がまだありません。対面できているのに取れないのか、そもそも会えていないのか、どちらかを確かめましょう。');
+  // 11. 反響率（自分が配ったエリア）
+  const rows = (S.resp && S.resp.rows) || []; const withRate = rows.filter(r => r.rate != null && r.dist > 300);
+  if (opt.self !== false && withRate.length >= 3) { const avg = withRate.reduce((a, r) => a + r.rate, 0) / withRate.length;
+    const mine = myPosts().list.map(([a]) => respOf(a)).filter(r => r && r.rate != null);
+    if (mine.length) { const m = mine.reduce((a, r) => a + r.rate, 0) / mine.length;
+      tip(m < avg * .8 ? 'warn' : 'good', '配ったエリアの反響率', `あなたが配ったエリアは平均${(m * 100).toFixed(2)}%、台帳の全エリア平均は${(avg * 100).toFixed(2)}%です。`, m < avg * .8 ? '反響が少ないエリアに時間を使っていないか、次の配布エリアを選ぶときに確認しましょう。' : '反響の取れるエリアを選べています。'); } }
+  // 12. 経費
+  if (opt.self !== false) { const ym = S.today.slice(0, 4) + '-' + S.today.slice(4, 6); const k = S.kh && S.kh.m && S.kh.m[ym]; const sa = S.sa && S.sa.m && S.sa.m[ym];
+    if (k && k.t && sa && sa.acq) tip('info', '1件あたりの経費', `今月の経費${yen(k.t)}・獲得${sa.acq}件で、1件あたり${yen(k.t / sa.acq)}。`, '交通費の大きい日に成果が出ているかを見て、遠いエリアに行く価値があるか判断しましょう。'); }
+  return out;
+}
+function coachBlock(items, title){
+  if (!items.length) return null;
+  const order = { warn: 0, info: 1, good: 2 };
+  const list = items.slice().sort((a, b) => order[a.lv] - order[b.lv]);
+  return el('details', { class: 'coach' }, el('summary', null, el('span', { text: title || 'カレンダーと記録からの分析' }), el('small', { text: `気をつけたい点 ${items.filter(i => i.lv === 'warn').length}つ` })),
+    list.map(i => el('div', { class: 'co ' + i.lv }, el('b', { text: i.title }), el('p', { text: i.fact }), el('p', { class: 'co-ask', text: i.ask }))),
+    el('p', { class: 'co-note', text: '数字はGoogleカレンダーの予定と、アプリ・訪問マップの記録から自動で出しています。比べているのは、法律の労働時間（1日8時間）・会社の基準・台帳の平均です。' }));
+}
+function coachCard(){
+  const items = analyze(myDays(), ME.id, { self: true });
+  if (!items.length) return null;
+  const top = items.filter(i => i.lv === 'warn')[0] || items[0];
+  const box = el('section', { class: 'coachc' }, el('div', { class: 'cc-h' }, el('b', { text: `${+S.today.slice(4, 6)}月のふり返り` }), el('small', { text: 'あなたのカレンダーと記録から' })),
+    el('div', { class: 'co ' + top.lv }, el('b', { text: top.title }), el('p', { text: top.fact }), el('p', { class: 'co-ask', text: top.ask })),
+    coachBlock(items.filter(i => i !== top), `ほかの分析 ${items.length - 1}件`));
+  return box;
 }
 // ===== 今月の数字（いちばん上）：獲得→発生予測、工事予定→売上予測、配布数とそのエリアの反響率 =====
 const ymOf = (off) => { const d = toDate(S.today); const x = new Date(d.getFullYear(), d.getMonth() + (off || 0), 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); };
@@ -1048,6 +1140,7 @@ function renderAdmin(main){
       el('div', { class: 'pg res' }, el('h4', { text: '成果' }), bar('獲得', 0, nf(t.got), 'got'), bar('対面', 0, nf(t.face), 'face'), bar('アポ', 0, nf(t.apo), 'apo')),
       el('div', { class: 'pr' }, [['訪問/時', f1(per(t.doors, t.h.door))], ['対面率', t.doors ? Math.round(t.face / t.doors * 100) + '%' : '—'], ['獲得/10時間', f1(t.work > 600000 ? t.got / (t.work / 36000000) : null)], ['1件あたり', t.got ? h1(t.work / t.got) + 'h' : '—']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
       spark(x, r),
+      coachBlock(analyze(x.days, x.u, { from: r.from, to: r.to, self: false })),
       el('details', { class: 'pcal' }, el('summary', { text: `${r.label}の予定の分析` }), calCard(perCal[x.u] || calStats(x.days, r.from, end, x.u), r.label)),
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
