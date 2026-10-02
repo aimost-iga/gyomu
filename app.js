@@ -302,7 +302,8 @@ function render(){
   main.textContent = '';
   const days = myDays();
   $('#meBtn').setAttribute('aria-pressed', String(S.tab === 'set'));
-  if (S.tab === 'set') renderSet(main); else renderToday(main);
+  $('#admBtn').setAttribute('aria-pressed', String(S.tab === 'admin'));
+  if (S.tab === 'set') renderSet(main); else if (S.tab === 'admin' && FB.isAdmin()) renderAdmin(main); else renderToday(main);
   window.scrollTo(0, keep);
 }
 const add = (box, ...xs) => { for (const x of xs.flat(3)) if (x != null && x !== false) box.append(x); };
@@ -648,6 +649,103 @@ function adminGame(){
     el('button', { class: 'btn primary', onclick: async () => { const d = {}; for (const k in inp) { const v = parseFloat(inp[k].value); d[k] = isFinite(v) && v >= 0 ? v : GOAL_DEF[k]; } try { await FB.cfg.set('goal', d); toast('目標の基準を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, '保存する')));
 }
 
+// ===== 管理（代表だけ）：月の仕事の量と成果 =====
+S.adm = { mon: 'cur', docs: null, key: '' };
+function monRange(which){
+  const d = toDate(S.today);
+  if (which === 'last') { const a = new Date(d.getFullYear(), d.getMonth() - 1, 1), b = new Date(d.getFullYear(), d.getMonth(), 0); const pa = new Date(d.getFullYear(), d.getMonth() - 2, 1), pb = new Date(d.getFullYear(), d.getMonth() - 1, 0); return { from: ymd(a), to: ymd(b), pfrom: ymd(pa), pto: ymd(pb), label: `${a.getMonth() + 1}月` }; }
+  const [pf, pt] = lastMonthSame(S.today);
+  return { from: monthStart(S.today), to: S.today, pfrom: pf, pto: pt, label: `${d.getMonth() + 1}月` };
+}
+async function loadAdmin(force){
+  if (!FB.isAdmin()) return;
+  const r = monRange(S.adm.mon); const key = r.pfrom + r.to;
+  if (!force && S.adm.key === key && S.adm.docs) return;
+  S.adm.key = key; S.adm.docs = null; rerender();
+  await loadUsers(); S.pushAll = await FB.push.all();
+  S.adm.docs = (await FB.day.range(r.pfrom, r.to)) || [];
+  rerender();
+}
+const per = (n, ms) => ms > 600000 ? n / (ms / 3600000) : null;
+const f1 = v => v == null ? '—' : v.toFixed(1);
+function delta(now, before){
+  if (!before) return null;
+  const d = Math.round((now - before) / before * 100);
+  return el('em', { class: 'dl ' + (d > 0 ? 'up' : d < 0 ? 'dn' : ''), text: d ? `${d > 0 ? '+' : ''}${d}%` : '±0' });
+}
+function renderAdmin(main){
+  const r = monRange(S.adm.mon);
+  add(main, el('div', { class: 'sethead' }, el('button', { class: 'back', onclick: () => go('today'), 'aria-label': '今日の画面に戻る' }, '‹'), el('h1', { text: '管理' }),
+    el('div', { class: 'seg adm-seg', role: 'group', 'aria-label': '月を選ぶ' }, [['cur', '今月'], ['last', '先月']].map(([v, t]) => el('button', { 'aria-pressed': String(S.adm.mon === v), onclick: () => { S.adm.mon = v; loadAdmin(true); } }, t)))));
+  if (!S.adm.docs) { add(main, el('div', { class: 'card' }, el('div', { class: 'muted', text: '読み込んでいます…' }))); return; }
+  const rows = byPerson(S.adm.docs, r.from, r.to).filter(x => { const u = (S.users || []).find(y => y.email === x.u); return !u || u.nt !== false; });
+  const prev = {}; byPerson(S.adm.docs, r.pfrom, r.pto).forEach(x => { prev[x.u] = x.t; });
+  const sum = k => rows.reduce((a, x) => a + (k === 'work' ? x.t.work : x.t[k]), 0);
+  const psum = k => Object.values(prev).reduce((a, t) => a + (k === 'work' ? t.work : t[k]), 0);
+  // 会社全体
+  add(main, el('section', { class: 'adm-total' },
+    el('div', { class: 'at-main' }, el('small', { text: `${r.label}の獲得（全員）` }), el('b', { text: nf(sum('got')) }), delta(sum('got'), psum('got'))),
+    el('div', { class: 'at-sub' }, [['稼働', h1(sum('work')) + 'h', delta(sum('work'), psum('work'))], ['訪問', nf(sum('doors')), delta(sum('doors'), psum('doors'))], ['反響対応', nf(sum('han')), delta(sum('han'), psum('han'))], ['配布', nf(sum('post')), delta(sum('post'), psum('post'))]]
+      .map(([l, v, d]) => el('div', null, el('small', { text: l }), el('b', { text: v }), d))),
+    el('div', { class: 'at-note', text: S.adm.mon === 'cur' ? '増減は先月の同じ日までとの比較です' : '増減はその前の月との比較です' })));
+  // 量と成果の図
+  add(main, quadrant(rows));
+  // 一人ずつ
+  add(main, el('h2', { class: 'sh' }, '一人ずつ', el('small', { text: '仕事の量と成果' })));
+  const mx = k => Math.max(1, ...rows.map(x => k === 'work' ? x.t.work : x.t[k]));
+  const today = S.adm.mon === 'cur';
+  rows.sort((a, b) => b.t.got - a.t.got || b.t.work - a.t.work).forEach(x => {
+    const t = x.t, p = prev[x.u] || null;
+    const st = today ? statOf(x.days[S.today], true, x.u) : null;
+    const state = st ? stateOf(st, true) : '';
+    const pu = (S.pushAll || {})[FB.ukey(x.u)]; const pt = PUSH_T[(pu && pu.perm) || 'default'] || PUSH_T.default;
+    const nag = today ? ((S.ntc[FB.ukey(x.u)] || {}).total || 0) : 0;
+    const work = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && x.days[d] && (statOf(x.days[d], d === S.today, x.u).work || statOf(x.days[d], d === S.today, x.u).v.doors));
+    const need = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && d < S.today && x.days[d] && !x.days[d].off && statOf(x.days[d], false, x.u).has).length;
+    const bar = (label, val, show, k, pk) => el('div', { class: 'pb' }, el('span', { text: label }), el('div', { class: 'pb-t' }, el('i', { style: `width:${Math.round((k === 'work' ? t.work : t[k]) / mx(k) * 100)}%` })), el('b', { text: show }), p ? delta(k === 'work' ? t.work : t[k], k === 'work' ? p.work : p[k]) : el('em'));
+    add(main, el('section', { class: 'card person' },
+      el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}` })),
+        state ? el('span', { class: 'st ' + (stCls(state) || (state === '予定の申告前' ? 'bad' : '')), text: state }) : null),
+      el('div', { class: 'pg vol' }, el('h4', { text: '仕事の量' }), bar('稼働', 0, h1(t.work) + 'h', 'work'), bar('訪問', 0, nf(t.doors), 'doors'), bar('反響対応', 0, nf(t.han), 'han'), bar('配布', 0, nf(t.post), 'post')),
+      el('div', { class: 'pg res' }, el('h4', { text: '成果' }), bar('獲得', 0, nf(t.got), 'got'), bar('対面', 0, nf(t.face), 'face'), bar('アポ', 0, nf(t.apo), 'apo')),
+      el('div', { class: 'pr' }, [['訪問/時', f1(per(t.doors, t.h.door))], ['対面率', t.doors ? Math.round(t.face / t.doors * 100) + '%' : '—'], ['獲得/10時間', f1(t.work > 600000 ? t.got / (t.work / 36000000) : null)], ['1件あたり', t.got ? h1(t.work / t.got) + 'h' : '—']].map(([l, v]) => el('div', null, el('small', { text: l }), el('b', { text: v })))),
+      spark(x, r),
+      today ? el('div', { class: 'pf' }, el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
+  });
+  add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), adminGame(), rosterBox());
+}
+// 日ごとの稼働（棒）と獲得（点）
+function spark(x, r){
+  const d0 = toDate(r.from), last = toDate(r.to).getMonth() === d0.getMonth() && r.to !== S.today ? new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate() : new Date(d0.getFullYear(), d0.getMonth() + 1, 0).getDate();
+  const cols = []; let mx = 1;
+  for (let i = 1; i <= last; i++) { const d = ymd(new Date(d0.getFullYear(), d0.getMonth(), i)); const st = d <= r.to && x.days[d] ? statOf(x.days[d], d === S.today, x.u) : null; cols.push([d, st]); if (st) mx = Math.max(mx, st.work); }
+  return el('div', { class: 'spark', role: 'img', 'aria-label': `${x.name}さんの日ごとの稼働と獲得` }, cols.map(([d, st]) => el('div', { class: 'sk' + (d === S.today ? ' today' : '') + (st && st.off ? ' off' : ''), title: st ? `${md(d)} 稼働${hm(st.work)}・獲得${st.got}` : md(d) },
+    st && st.got ? el('em') : null, el('i', { style: `height:${st && st.work ? Math.max(6, Math.round(st.work / mx * 100)) : 0}%` }))));
+}
+// 仕事の量（稼働時間）× 成果（獲得）の図
+function quadrant(rows){
+  const W = 340, H = 220, P = 30;
+  const xs = rows.map(x => x.t.work / 3600000), ys = rows.map(x => x.t.got);
+  const mxX = Math.max(1, ...xs) * 1.15, mxY = Math.max(1, ...ys) * 1.2;
+  const ax = xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length), ay = ys.reduce((a, b) => a + b, 0) / Math.max(1, ys.length);
+  const X = v => P + v / mxX * (W - P - 10), Y = v => H - P - v / mxY * (H - P - 12);
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg'); svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('class', 'qd');
+  const mk = (tag, a, txt) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; svg.append(e); return e; };
+  mk('rect', { x: X(ax), y: 12, width: W - 10 - X(ax), height: Y(ay) - 12, class: 'q-good' });
+  mk('line', { x1: P, y1: H - P, x2: W - 10, y2: H - P, class: 'q-axis' }); mk('line', { x1: P, y1: 12, x2: P, y2: H - P, class: 'q-axis' });
+  mk('line', { x1: X(ax), y1: 12, x2: X(ax), y2: H - P, class: 'q-avg' }); mk('line', { x1: P, y1: Y(ay), x2: W - 10, y2: Y(ay), class: 'q-avg' });
+  mk('text', { x: W - 14, y: 26, class: 'q-lb', 'text-anchor': 'end' }, 'よく動いて成果も出ている');
+  mk('text', { x: W - 14, y: H - P - 8, class: 'q-lb', 'text-anchor': 'end' }, '動いているが成果が少ない');
+  mk('text', { x: P + 6, y: 26, class: 'q-lb' }, '少ない時間で成果');
+  mk('text', { x: P + 6, y: H - P - 8, class: 'q-lb' }, '量が足りない');
+  mk('text', { x: W - 10, y: H - 8, class: 'q-ax', 'text-anchor': 'end' }, '稼働時間 →'); mk('text', { x: 4, y: 14, class: 'q-ax' }, '獲得');
+  const placed = [];
+  rows.forEach((x, i) => { let cx = X(xs[i]), cy = Y(ys[i]); let n = 0; while (placed.some(([px, py]) => Math.hypot(px - cx, py - cy) < 24) && n < 8) { cx += 22; if (cx > W - 20) { cx = X(xs[i]) - 22 * (n + 1); } n++; } placed.push([cx, cy]); mk('circle', { cx, cy, r: 13, class: 'q-dot' }); mk('text', { x: cx, y: cy + 4.5, class: 'q-ini', 'text-anchor': 'middle' }, (x.name || '?').slice(0, 1)); });
+  return el('section', { class: 'card' }, el('h3', null, '仕事の量 × 成果', el('small', { text: '点線は全員の平均' })), svg,
+    el('div', { class: 'muted', text: '右上ほど「よく動いて成果も出ている」。右下は量は出ているので、やり方（時間帯・エリア・話し方）を見直す余地があります。左下は量そのものが足りていません。' }));
+}
+
 // ===== 設定 =====
 function renderSet(main){
   add(main, el('div', { class: 'sethead' }, el('button', { class: 'back', onclick: () => go('today'), 'aria-label': '今日の画面に戻る' }, '‹'), el('h1', { text: '設定' })));
@@ -671,7 +769,7 @@ function renderSet(main){
   add(main, el('section', { class: 'card' }, el('h3', { text: 'アカウント' }),
     el('div', { class: 'row' }, el('a', { class: 'btn', href: 'guide.html' }, '使い方'), el('button', { class: 'btn', onclick: () => FB.signOut() }, 'ログアウト')),
     el('div', { class: 'muted', text: `ログイン中：${ME.email}` })));
-  if (FB.isAdmin()) add(main, el('h2', { class: 'sh', text: '代表だけの設定' }), notifySwitch(), adminGame(), rosterBox());
+  if (FB.isAdmin()) add(main, el('button', { class: 'btn wide', onclick: () => go('admin') }, '管理の画面を開く（代表）'));
 }
 // 自動のお知らせ・カレンダー反映を、代表が止めたり動かしたりする
 function notifySwitch(){
@@ -727,7 +825,8 @@ function pushAuto(){ const k = (S.appcfg && S.appcfg.vapid) || VAPID; if (pushTr
 window.addEventListener('push-in', e => { const d = e.detail || {}; toast(`${d.title || 'お知らせ'}：${d.body || ''}`); });
 
 // ---------- 起動 ----------
-function go(tab){ S.tab = tab === 'set' ? 'set' : 'today'; render(); window.scrollTo(0, 0); }
+function go(tab){ S.tab = ['set', 'admin'].includes(tab) ? tab : 'today'; if (S.tab === 'admin') loadAdmin(); render(); window.scrollTo(0, 0); }
+$('#admBtn').addEventListener('click', () => go(S.tab === 'admin' ? 'today' : 'admin'));
 $('#meBtn').addEventListener('click', () => go(S.tab === 'set' ? 'today' : 'set'));
 $('#homeBtn').addEventListener('click', () => go('today'));
 setInterval(() => {
@@ -750,6 +849,7 @@ async function boot(){
   if (st.state !== 'in') { gate(st.state, st.email); return; }
   ME = st.me;
   $('#meBtn').hidden = false; $('#meIni').textContent = (ME.name || '?').slice(0, 1);
+  if (FB.isAdmin()) $('#admBtn').hidden = false;
   S.tab = 'today';
   watch();
   render();
