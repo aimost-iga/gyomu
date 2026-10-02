@@ -857,7 +857,7 @@ function coachBlock(items, title){
   if (!items.length) return null;
   const order = { warn: 0, info: 1, good: 2 };
   const list = items.slice().sort((a, b) => order[a.lv] - order[b.lv]);
-  return el('details', { class: 'coach' }, el('summary', null, el('span', { text: title || 'カレンダーと記録からの分析' }), el('small', { text: `気をつけたい点 ${items.filter(i => i.lv === 'warn').length}つ` })),
+  return el('details', { class: 'coach' }, el('summary', null, el('span', { text: title || '活動分析とポイント' }), el('small', { text: `気をつけたい点 ${items.filter(i => i.lv === 'warn').length}つ` })),
     list.map(i => el('div', { class: 'co ' + i.lv }, el('b', { text: i.title }), el('p', { text: i.fact }), el('p', { class: 'co-ask', text: i.ask }))),
     el('p', { class: 'co-note', text: '数字はGoogleカレンダーの予定と、アプリ・訪問マップの記録から自動で出しています。比べているのは、法律の労働時間（1日8時間）・会社の基準・台帳の平均です。' }));
 }
@@ -865,9 +865,9 @@ function coachCard(){
   const items = analyze(myDays(), ME.id, { self: true });
   if (!items.length) return null;
   const top = items.filter(i => i.lv === 'warn')[0] || items[0];
-  const box = el('section', { class: 'coachc' }, el('div', { class: 'cc-h' }, el('b', { text: `${+S.today.slice(4, 6)}月のふり返り` }), el('small', { text: 'あなたのカレンダーと記録から' })),
+  const box = el('section', { class: 'coachc' }, el('div', { class: 'cc-h' }, el('b', { text: '活動分析とポイント' }), el('small', { text: `${+S.today.slice(4, 6)}月・カレンダーと記録から` })),
     el('div', { class: 'co ' + top.lv }, el('b', { text: top.title }), el('p', { text: top.fact }), el('p', { class: 'co-ask', text: top.ask })),
-    coachBlock(items.filter(i => i !== top), `ほかの分析 ${items.length - 1}件`));
+    coachBlock(items.filter(i => i !== top), `ほかのポイント ${items.length - 1}件`));
   return box;
 }
 // ===== 今月の数字（いちばん上）：獲得→発生予測、工事予定→売上予測、配布数とそのエリアの反響率 =====
