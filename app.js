@@ -16,6 +16,8 @@ const RANKS = [[0, '見習い'], [300, '駆け出し'], [800, '一人前'], [150
 const FACE = ['fng', 'again', 'got'];
 const WEEK = '日月火水木金土';
 const MAP_URL = 'https://aimost-iga.github.io/houmon-map/';
+// スマホのお知らせの鍵（公開してよい鍵。設定画面で差し替え可）
+const VAPID = 'BL-8TMM-bqpyBIN-ASgKrLvFG2GN30s3M6I47dm1-L6kN0rDC8ZT31t9nYtV5EvxqkGzIxGpllxX3oE0LK9Uwuw';
 // 称号（取ると自分の画面に並ぶ）
 const TITLES = [
   ['first', '一', 'はじめの一歩', '初めて日報を出す', a => a.subs >= 1],
@@ -790,7 +792,7 @@ function renderSet(main){
   add(main, el('section', { class: 'card' }, el('h3', { text: 'この端末' }), el('label', { class: 'row', for: 'snd' }, snd, '達成したときに音を鳴らす'),
     el('div', { class: 'row' }, el('a', { class: 'btn', href: 'guide.html' }, '使い方'), el('button', { class: 'btn', onclick: () => FB.signOut() }, 'ログアウト')),
     el('div', { class: 'muted', text: `ログイン中：${ME.email}` })));
-  if (FB.isAdmin()) add(main, rosterBox(), appBox());
+  if (FB.isAdmin()) add(main, rosterBox());
 }
 // 名簿：人の名前をそろえる。別名（ほかの表・リストでの書き方）も登録して、自動で本人に寄せる
 function rosterBox(){
@@ -825,14 +827,14 @@ let pushMod = null;
 async function pushOn(ask){
   try {
     pushMod = pushMod || await import('./push.js?v=1');
-    S.pushState = await pushMod.enable((S.appcfg && S.appcfg.vapid) || '', ask);
+    S.pushState = await pushMod.enable((S.appcfg && S.appcfg.vapid) || VAPID, ask);
     if (ask && S.pushState === 'granted') toast('お知らせを受け取れるようになりました');
     if (ask && S.pushState === 'denied') toast('「許可しない」になりました。スマホの設定から許可できます');
   } catch (e) { S.pushState = S.pushState || 'unsupported'; if (ask) toast('お知らせの設定ができませんでした。もう一度お試しください'); }
   rerender();
 }
 let pushTried = '';
-function pushAuto(){ const k = (S.appcfg && S.appcfg.vapid) || '-'; if (pushTried === k) return; pushTried = k; pushOn(false); }
+function pushAuto(){ const k = (S.appcfg && S.appcfg.vapid) || VAPID; if (pushTried === k) return; pushTried = k; pushOn(false); }
 window.addEventListener('push-in', e => { const d = e.detail || {}; toast(`${d.title || 'お知らせ'}：${d.body || ''}`); ding(1); });
 
 // ---------- 起動 ----------
