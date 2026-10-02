@@ -52,6 +52,7 @@ function tick_(now) {
   // 代表がアプリの「設定」で「動かす」にするまでは、お知らせはしない
   const appCfg = getDoc_('cfg/app') || {};
   try { readAreas_(now); } catch (e) { log_('配布エリアの台帳の読み取りの失敗：' + e.message); }
+  try { readKeihi_(now); } catch (e) { log_('経費の読み取りの失敗：' + e.message); }
   if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
   const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
@@ -373,6 +374,57 @@ function readAreas_(now) {
   if (P.getProperty(key) === h) return;
   fsFetch_(FS + '/cfg/areas', { method: 'patch', payload: JSON.stringify({ fields: { src: { stringValue: 'daicho' }, at: { integerValue: String(now.getTime()) }, rounds: toFs_(rounds) } }) });
   P.setProperty(key, h);
+}
+
+// ---------- 経費（経費申請管理のスプレッドシート「フォームの回答 1」 → kh/<人>・kh/_all） ----------
+const KEIHI_SHEET = '17kNPksAgkHaUjbqkWl9pVdyIbN9FKmGl2Ocnb7wM-VM';
+const KEIHI_TAB = 'フォームの回答 1';
+function keihiCat_(t) {
+  t = String(t || '');
+  if (/レンタ.?サイクル|ダイチャリ|自転車/.test(t)) return 'cycle';
+  if (/ガソリン/.test(t)) return 'gas';
+  if (/駐車|高速/.test(t)) return 'park';
+  if (/電車|交通|バス|新幹線/.test(t)) return 'train';
+  if (/通信/.test(t)) return 'tel';
+  return 'other';
+}
+function keihiYen_(h, f) {
+  if (typeof h === 'number' && h > 0) return Math.round(h);
+  if (typeof f === 'number') return Math.round(f);
+  const s = String(f || '').normalize('NFKC').replace(/,/g, '');
+  const m = s.match(/(\d+)\s*円/) || s.match(/¥\s*(\d+)/); if (m) return Number(m[1]);
+  const all = s.match(/\d+/g); return all ? Number(all[all.length - 1]) : 0;
+}
+function readKeihi_(now) {
+  const sh = SpreadsheetApp.openById(KEIHI_SHEET).getSheetByName(KEIHI_TAB); if (!sh) return;
+  const n = sh.getLastRow(); if (n < 2) return;
+  const v = sh.getRange(1, 1, n, 8).getValues();
+  const users = people_(); const nz = x => String(x || '').normalize('NFKC').replace(/[\s　]/g, '');
+  const who = name => { const k = nz(name); if (!k) return null; return users.find(u => [u.name].concat(u.al || []).map(nz).filter(Boolean).some(a => a === k || k.indexOf(a) === 0 || a.indexOf(k) === 0)) || null; };
+  const all = {}, per = {};
+  for (let i = 1; i < v.length; i++) {
+    const r = v[i]; const ts = r[0]; if (!ts || !r[1]) continue;
+    const d = ts instanceof Date ? ts : new Date(String(ts).replace(/-/g, '/'));
+    if (isNaN(d.getTime())) continue;
+    const ym = Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM');
+    const yen = keihiYen_(r[7], r[5]); if (!yen) continue;
+    const name = String(r[1]).trim(); const pay = /個人/.test(r[3]) ? 'tate' : /会社|カード/.test(r[3]) ? 'card' : 'none';
+    const cat = keihiCat_(r[2]);
+    const add = o => { o.t = (o.t || 0) + yen; o[pay] = (o[pay] || 0) + yen; o.n = (o.n || 0) + 1; o.by = o.by || {}; o.by[cat] = (o.by[cat] || 0) + yen; };
+    const am = all[ym] = all[ym] || {}; add(am[name] = am[name] || {});
+    const u = who(name);
+    if (u) { const uk = ukey_(u.email); const pm = (per[uk] = per[uk] || { u: u.email, m: {} }).m; add(pm[ym] = pm[ym] || {}); if (!am[name].u) am[name].u = u.email; }
+  }
+  const P = PropertiesService.getScriptProperties();
+  const save = (id, obj) => {
+    const sig = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(obj), Utilities.Charset.UTF_8));
+    if (P.getProperty('khsig_' + id) === sig) return;
+    const f = {}; Object.keys(obj).forEach(k => { f[k] = toFs_(obj[k]); }); f.at = { integerValue: String(now.getTime()) };
+    fsFetch_(FS + '/kh/' + id, { method: 'patch', payload: JSON.stringify({ fields: f }) });
+    P.setProperty('khsig_' + id, sig);
+  };
+  save('_all', { m: all });
+  Object.keys(per).forEach(uk => save(uk, per[uk]));
 }
 
 // ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------

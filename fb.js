@@ -81,6 +81,11 @@ const push = {
   save: async d => { try { await setDoc(ref('push/' + ukey(ME.email)), clean(Object.assign({ u: ME.email, at: Date.now() }, d)), { merge: true }); } catch (e) {} },
   all: async () => { if (!isAdmin()) return {}; try { const o = {}; (await getDocs(collection(fs, 'push'))).docs.forEach(x => { o[x.id] = x.data(); }); return o; } catch (e) { return {}; } }
 };
+// 経費（経費申請管理のスプレッドシートから Apps Script が書く）：本人は自分の分、代表は全員分
+const kh = {
+  mine: next => onSnapshot(ref('kh/' + ukey(ME.email)), s => next(s.exists() ? s.data() : null), () => next(null)),
+  all: next => isAdmin() ? onSnapshot(ref('kh/_all'), s => next(s.exists() ? s.data() : null), () => next(null)) : (next(null), () => {})
+};
 // 自動のお知らせを送った回数（Apps Script が書く）
 const ntc = {
   watch: (d, next) => isAdmin() ? onSnapshot(ref('ntc/' + d), s => next(s.exists() ? s.data() : {}), () => next({})) : (next({}), () => {})
@@ -107,7 +112,7 @@ function whenSignedIn() {
 }
 
 window.FB = {
-  app, day, act, cfg, people, push, ntc, ukey,
+  app, day, act, cfg, people, push, ntc, kh, ukey,
   me: () => ME, isStaff, isAdmin, whenSignedIn,
   signIn: async () => {
     const p = new GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' });

@@ -15,6 +15,10 @@ const WEEK = '日月火水木金土';
 // この日より前は、日報の出し忘れとして数えない（アプリを使い始めた日）
 const START = '20261003';
 const MAP_URL = 'https://aimost-iga.github.io/houmon-map/';
+const KEIHI_FORM = 'https://forms.gle/WAtRmB79m35BkEXT9';
+const KEIHI_SHEET = 'https://docs.google.com/spreadsheets/d/17kNPksAgkHaUjbqkWl9pVdyIbN9FKmGl2Ocnb7wM-VM/edit?gid=969630987#gid=969630987';
+const KH_CAT = { train: '電車・バス', cycle: 'レンタサイクル', gas: 'ガソリン', park: '駐車場・高速', tel: '通信費', other: 'その他' };
+const yen = n => '¥' + Math.round(+n || 0).toLocaleString();
 // スマホのお知らせの鍵（公開してよい鍵。設定画面で差し替え可）
 const VAPID = 'BL-8TMM-bqpyBIN-ASgKrLvFG2GN30s3M6I47dm1-L6kN0rDC8ZT31t9nYtV5EvxqkGzIxGpllxX3oE0LK9Uwuw';
 // ---------- 小さな道具 ----------
@@ -452,6 +456,8 @@ function watch(){
   S.unsub.push(FB.cfg.watch('goal', d => { S.goal = Object.assign({}, GOAL_DEF, d || {}); rerender(); }));
   S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); rerender(); }));
   S.unsub.push(FB.cfg.watch('areas', d => { S.areas = d || {}; rerender(); }));
+  S.unsub.push(FB.kh.mine(d => { S.kh = d; rerender(); }));
+  if (FB.isAdmin()) S.unsub.push(FB.kh.all(d => { S.khAll = d; if (S.tab === 'admin') rerender(); }));
   if (FB.isAdmin()) S.unsub.push(FB.cfg.watch('calstat', d => { S.calstat = d || {}; if (S.tab === 'admin') rerender(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
   loadMine();
@@ -765,7 +771,19 @@ function renderToday(main){
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
   if (st.plan.length || st.work || st.v.doors || st.han.all || st.post) add(main, reportBox(st));
-  add(main, addsBox());
+  add(main, addsBox(), keihiBox());
+}
+// 経費：申請フォームへすぐ飛べる＋今月の自分の経費
+function keihiBox(){
+  const ym = S.today.slice(0, 4) + '-' + S.today.slice(4, 6);
+  const m = (S.kh && S.kh.m && S.kh.m[ym]) || null;
+  const d = toDate(S.today);
+  return el('section', { class: 'card' }, el('h3', null, '経費', el('small', { text: `${d.getMonth() + 1}月の自分の経費` })),
+    m ? el('div', { class: 'kpis k3' }, [['合計', yen(m.t)], ['会社カード', yen(m.card)], ['個人立替', yen(m.tate)]].map(([t, v]) => el('div', { class: 'kpi' }, el('b', { text: v }), el('span', { text: t })))) : el('div', { class: 'muted', text: '今月の経費の申請はまだありません。' }),
+    m && m.none ? el('div', { class: 'muted', text: `支払い方法が未記入の分 ${yen(m.none)}` }) : null,
+    el('div', { class: 'row' }, el('a', { class: 'btn primary', href: KEIHI_FORM, target: '_blank', rel: 'noopener' }, '経費を申請する'),
+      FB.isAdmin() ? el('a', { class: 'btn', href: KEIHI_SHEET, target: '_blank', rel: 'noopener' }, '管理シートを開く') : null),
+    el('div', { class: 'muted', text: '申請した分は10分ほどでここに反映されます。' }));
 }
 
 // ===== 成績 =====
@@ -939,6 +957,7 @@ function renderAdmin(main){
   const perCal = {};
   rows.forEach(x => { const o = perCal[x.u] = calStats(x.days, r.from, end, x.u); for (const k in o.kind) teamCal.kind[k] += o.kind[k]; ['total', 'past', 'future', 'apo', 'planDays', 'offDays', 'emptyDays', 'roughDays', 'actual'].forEach(k => { teamCal[k] += o[k]; }); o.heat.forEach((row, i) => row.forEach((v, j) => { teamCal.heat[i][j] += v; })); });
   add(main, el('section', { class: 'card' }, el('h3', null, `${r.label}の予定（Googleカレンダー）`, el('small', { text: '全員の合計' })), calCard(teamCal, r.label, true)));
+  add(main, keihiAdmin(r));
   // 一人ずつ
   add(main, el('h2', { class: 'sh' }, '一人ずつ', el('small', { text: '仕事の量と成果' })));
   const mx = k => Math.max(1, ...rows.map(x => k === 'work' ? x.t.work : x.t[k]));
@@ -963,6 +982,37 @@ function renderAdmin(main){
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
   add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), areaBox(), kwBox(), adminGame(), rosterBox());
+}
+// ===== 経費（月ごと・担当者別） =====
+function keihiAdmin(r){
+  const all = (S.khAll && S.khAll.m) || {};
+  const ym0 = (r.end || r.to); const ym = ym0.slice(0, 4) + '-' + ym0.slice(4, 6);
+  const pd = new Date(+ym.slice(0, 4), +ym.slice(5) - 2, 1); const pym = pd.getFullYear() + '-' + pad(pd.getMonth() + 1);
+  const cur = all[ym] || {}, prev = all[pym] || {};
+  const names = Object.keys(cur).sort((a, b) => cur[b].t - cur[a].t);
+  const lab = `${+ym.slice(5)}月`;
+  const sec = el('section', { class: 'card' }, el('h3', null, `${lab}の経費（担当者別）`, el('a', { class: 'link', href: KEIHI_SHEET, target: '_blank', rel: 'noopener' }, '管理シートを開く')));
+  if (!S.khAll) { add(sec, el('div', { class: 'muted', text: '読み込み中…（はじめは10分ほどで入ります）' })); return sec; }
+  if (!names.length) { add(sec, el('div', { class: 'muted', text: `${lab}の経費の申請はまだありません。` })); return sec; }
+  const T = { t: 0, card: 0, tate: 0, none: 0, n: 0 }; names.forEach(n => ['t', 'card', 'tate', 'none', 'n'].forEach(k => { T[k] += +cur[n][k] || 0; }));
+  const PT = Object.values(prev).reduce((a, o) => a + (+o.t || 0), 0);
+  const mx = Math.max(1, ...names.map(n => cur[n].t));
+  add(sec, el('div', { class: 'kh-top' }, el('div', null, el('small', { text: '合計' }), el('b', { text: yen(T.t) }), PT ? delta(T.t, PT) : null), el('div', null, el('small', { text: '会社カード' }), el('b', { text: yen(T.card) })), el('div', null, el('small', { text: '個人立替（精算が必要）' }), el('b', { text: yen(T.tate) }))));
+  names.forEach(n => { const o = cur[n]; const by = o.by || {};
+    add(sec, el('div', { class: 'kh-row' },
+      el('div', { class: 'kh-h' }, el('b', { text: n }), el('span', { text: `${o.n || 0}件` }), el('strong', { text: yen(o.t) }), prev[n] ? delta(o.t, prev[n].t) : el('em')),
+      el('div', { class: 'kb' }, Object.keys(KH_CAT).filter(k => by[k]).map((k, i) => el('i', { class: 'kh-c' + i, style: `width:${(by[k] / mx * 100).toFixed(1)}%`, title: `${KH_CAT[k]} ${yen(by[k])}` }))),
+      el('div', { class: 'kh-d' }, `カード ${yen(o.card)}・立替 ${yen(o.tate)}${o.none ? '・未記入 ' + yen(o.none) : ''}　`, Object.keys(KH_CAT).filter(k => by[k]).map(k => `${KH_CAT[k]} ${yen(by[k])}`).join('・')))); });
+  // 直近6か月
+  const months = []; for (let i = 5; i >= 0; i--) { const d = new Date(+ym.slice(0, 4), +ym.slice(5) - 1 - i, 1); months.push(d.getFullYear() + '-' + pad(d.getMonth() + 1)); }
+  const people = [...new Set(months.flatMap(m => Object.keys(all[m] || {})))];
+  add(sec, el('details', { class: 'pcal' }, el('summary', { text: '月ごとの推移（直近6か月）' }),
+    el('div', { class: 'kh-tw' }, el('table', { class: 'kh-t' },
+      el('thead', null, el('tr', null, el('th', { text: '' }), months.map(m => el('th', { text: `${+m.slice(5)}月` })))),
+      el('tbody', null, people.map(p => el('tr', null, el('th', { text: p }), months.map(m => el('td', { text: all[m] && all[m][p] ? yen(all[m][p].t) : '—' })))),
+        el('tr', { class: 'kh-sum' }, el('th', { text: '合計' }), months.map(m => { const v = Object.values(all[m] || {}).reduce((a, o) => a + (+o.t || 0), 0); return el('td', { text: v ? yen(v) : '—' }); })))))));
+  add(sec, el('div', { class: 'muted', text: '経費申請のフォームの回答から自動で集計しています（申請した日の月で数えます）。名前は申請フォームの「名前」です。' }));
+  return sec;
 }
 // ===== 月の予定（Googleカレンダー）の分析 =====
 const CK = { door: '訪販', call: '反響', post: '配布', apo: 'アポ', other: 'その他' };
