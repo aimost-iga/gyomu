@@ -759,7 +759,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), salesCard(), coachCard(), pointCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
+  add(main, greet(st), salesCard(), coachCard(), pointCard(), memoCard(), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -916,11 +916,42 @@ function pointCard(){
   ];
   const a = ad[wk % ad.length];
   return el('section', { class: 'pointc' },
-    el('div', { class: 'cc-h' }, el('b', { text: 'あなたのポイント' })),
-    el('div', { class: 'pt-q' }, el('small', { text: '今日の問い' }), el('p', { text: q })),
+    el('div', { class: 'cc-h' }, el('b', { text: `${ME.name}さんのポイント` })),
+    el('div', { class: 'pt-q' }, el('small', { text: '今日の問い' }), el('p', { text: `${ME.name}さん、${q}` })),
     el('div', { class: 'pt-a' }, el('small', { text: '今週の考え方' }), el('b', { text: a[0] }), el('p', { text: a[1] })),
     el('details', { class: 'coach' }, el('summary', null, el('span', { text: '今週のやりとりの確認' }), el('small', { text: '3つ' })),
       el('ul', { class: 'pt-ck' }, ck.map(t => el('li', { text: t })))));
+}
+// ===== ひらめきメモ：思いついたこと・考えたことを一行で残す（本人があとで見返せる） =====
+function allMemos(days){
+  const out = []; for (const [d, doc] of Object.entries(days)) for (const id in ((doc && doc.memo) || {})) { const m = doc.memo[id]; if (m && m.x) out.push({ d, id, t: +m.t || 0, x: m.x, u: doc.u }); }
+  return out.sort((a, b) => b.t - a.t);
+}
+const memoTime = t => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${pad(d.getMinutes())}`; };
+function memoCard(){
+  const list = allMemos(myDays());
+  const ta = el('textarea', { rows: 2, placeholder: '例：夕方の青葉区は在宅が多い／チラシの裏に料金比較を載せたら？／〇〇さんの話し方を真似する', 'aria-label': 'ひらめきメモ' });
+  const save = () => { const x = ta.value.trim(); if (!x) { ta.focus(); return; } ta.value = ''; put(S.today, { memo: { [uid()]: { x, t: Date.now() } } }, true); toast('メモを残しました'); };
+  return el('section', { class: 'memoc' },
+    el('div', { class: 'cc-h' }, el('b', { text: 'ひらめきメモ' }), list.length ? el('button', { class: 'link', onclick: () => memoModal() }, `これまでのメモ ${list.length}件`) : null),
+    el('p', { class: 'mm-why', text: `いいアイデアは、机の前ではなく、移動中や現場でふと浮かびます。そして、そのほとんどは数時間で消えます。${ME.name}さんが思いついたその一瞬を、一行だけでいいので残してください。積み重なったメモは、あとで見返すと大きな結果につながるヒントの宝庫になります。` }),
+    ta, el('div', { class: 'row' }, el('button', { class: 'btn primary', onclick: save }, '残す')),
+    list.length ? el('div', { class: 'mm-list' }, list.slice(0, 2).map(m => el('div', { class: 'mm' }, el('small', { text: memoTime(m.t) }), el('p', { text: m.x })))) : null);
+}
+function memoModal(){
+  const list = allMemos(myDays());
+  const q = el('input', { type: 'search', placeholder: 'メモを探す（言葉で絞り込み）' });
+  const box = el('div', { class: 'mm-list' });
+  const draw = () => { box.textContent = ''; const w = q.value.trim(); list.filter(m => !w || m.x.includes(w)).forEach(m => add(box, el('div', { class: 'mm' }, el('div', { class: 'mm-h' }, el('small', { text: memoTime(m.t) }),
+    el('button', { class: 'del', 'aria-label': 'このメモを消す', onclick: () => { if (!confirm('このメモを消しますか？')) return; drop(m.d, 'memo', m.id); const i = list.indexOf(m); if (i >= 0) list.splice(i, 1); draw(); } }, '×')), el('p', { text: m.x })))); };
+  q.addEventListener('input', draw); draw();
+  modal(`${ME.name}さんのメモ（${list.length}件）`, [q, box, el('button', { class: 'btn wide', onclick: e => e.target.closest('.modal').remove() }, '閉じる')]);
+}
+function memoAdmin(docs){
+  const list = allMemos(Object.fromEntries((docs || []).map(d => [d.d + '_' + d.u, d])));
+  if (!list.length) return null;
+  return keepOpen('memoadm', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: 'みんなのひらめきメモ' }), el('small', { text: `${list.length}件` })),
+    el('div', { class: 'mm-list' }, list.slice(0, 200).map(m => el('div', { class: 'mm' }, el('small', { text: `${nameOf(m.u)}・${memoTime(m.t)}` }), el('p', { text: m.x }))))));
 }
 // ===== 今月の数字（いちばん上）：獲得→発生予測、工事予定→売上予測、配布数とそのエリアの反響率 =====
 const ymOf = (off) => { const d = toDate(S.today); const x = new Date(d.getFullYear(), d.getMonth() + (off || 0), 1); return x.getFullYear() + '-' + pad(x.getMonth() + 1); };
@@ -1162,7 +1193,7 @@ function renderAdmin(main){
     el('div', { class: 'at-sub' }, [['稼働', h1(sum('work')) + 'h', delta(sum('work'), psum('work'))], ['訪問', nf(sum('doors')), delta(sum('doors'), psum('doors'))], ['反響対応', nf(sum('han')), delta(sum('han'), psum('han'))], ['配布', nf(sum('post')), delta(sum('post'), psum('post'))]]
       .map(([l, v, d]) => el('div', null, el('small', { text: l }), el('b', { text: v }), d))),
     el('div', { class: 'at-note', text: { cur: '増減は先月の同じ日までとの比較です', last: '増減はその前の月との比較です', week: '増減は先週の同じ曜日までとの比較です', lweek: '増減はその前の週との比較です' }[S.adm.mon] })));
-  add(main, salesAdmin(), respAdmin());
+  add(main, salesAdmin(), respAdmin(), memoAdmin(S.adm.docs.filter(d => d.d >= r.from && d.d <= (r.end || r.to))));
   // 量と成果の図
   add(main, quadrant(rows));
   // 月の予定（カレンダー）
