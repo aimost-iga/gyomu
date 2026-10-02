@@ -12,6 +12,8 @@ const POST_TY = ['分譲', '賃貸', '混在'];
 const GOAL_DEF = { std: 6, door: 60, face: 10, call: 15, post: 500, got: 1, monthGot: 20 };
 const FACE = ['fng', 'again', 'got'];
 const WEEK = '日月火水木金土';
+// この日より前は、日報の出し忘れとして数えない（アプリを使い始めた日）
+const START = '20261003';
 const MAP_URL = 'https://aimost-iga.github.io/houmon-map/';
 // スマホのお知らせの鍵（公開してよい鍵。設定画面で差し替え可）
 const VAPID = 'BL-8TMM-bqpyBIN-ASgKrLvFG2GN30s3M6I47dm1-L6kN0rDC8ZT31t9nYtV5EvxqkGzIxGpllxX3oE0LK9Uwuw';
@@ -479,7 +481,7 @@ function yesterdayBox(){
       } }, '終了時刻を入れる'))));
   }
   const yst = statOf(y, false);
-  if (yst.has && !yst.sub && !yst.off) {
+  if (yst.has && !yst.sub && !yst.off && S.yday >= START) {
     const ta = el('textarea', { rows: 2, placeholder: '昨日の振り返りをひとこと' });
     out.push(el('section', { class: 'card bad' }, el('h3', { text: '昨日の日報がまだです' }),
       el('div', { class: 'muted', text: '出すまでお知らせが届きます。ひとことで大丈夫です。' }), ta,
@@ -745,7 +747,7 @@ function renderAdmin(main){
     const pu = (S.pushAll || {})[FB.ukey(x.u)]; const pt = PUSH_T[(pu && pu.perm) || 'default'] || PUSH_T.default;
     const nag = today ? ((S.ntc[FB.ukey(x.u)] || {}).total || 0) : 0;
     const work = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && x.days[d] && (statOf(x.days[d], d === S.today, x.u).work || statOf(x.days[d], d === S.today, x.u).v.doors));
-    const need = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && d < S.today && x.days[d] && !x.days[d].off && statOf(x.days[d], false, x.u).has).length;
+    const need = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && d < S.today && d >= START && x.days[d] && !x.days[d].off && statOf(x.days[d], false, x.u).has).length;
     const bar = (label, val, show, k, pk) => el('div', { class: 'pb' }, el('span', { text: label }), el('div', { class: 'pb-t' }, el('i', { style: `width:${Math.round((k === 'work' ? t.work : t[k]) / mx(k) * 100)}%` })), el('b', { text: show }), p ? delta(k === 'work' ? t.work : t[k], k === 'work' ? p.work : p[k]) : el('em'));
     add(main, el('section', { class: 'card person' },
       el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}${t.plan ? `・予定 ${h1(t.plan)}h に対して実際 ${Math.round(t.work / t.plan * 100)}%` : ''}` })),
