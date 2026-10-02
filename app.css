@@ -426,3 +426,6 @@ em.dl.up{color:var(--good)} em.dl.dn{color:var(--bad)}
 .dl-act.auto{opacity:.85}
 .dl-key i.k-plan{background:transparent;border:1px dashed var(--ink3)}
 .dl-key i.k-act{background:var(--ink2);height:6px;margin-bottom:2px}
+.card.forgot{background:linear-gradient(180deg,var(--surface),color-mix(in srgb,var(--surface) 80%,var(--brand-soft)))}
+.card.forgot > h3::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--brand);margin-right:-2px}
+.card.forgot > h3{justify-content:flex-start}

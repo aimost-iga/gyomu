@@ -9,7 +9,7 @@ const KIND_ORDER = ['door', 'call', 'post', 'other'];
 const KC = { door: 'var(--k-door)', call: 'var(--k-call)', post: 'var(--k-post)', other: 'var(--k-other)' };
 const HAN = [['call', '電話した', ''], ['msg', 'メッセージだけ', '電話せず文字で対応'], ['conn', 'つながった', '話せた'], ['apo', 'アポ・提案', '提案まで進んだ'], ['inv', '無効', 'いたずら・対象外など'], ['got', '獲得', '申込まで']];
 const POST_TY = ['分譲', '賃貸', '混在'];
-const GOAL_DEF = { std: 6, door: 60, face: 10, call: 15, post: 500, got: 1, monthGot: 20 };
+const GOAL_DEF = { brk: 1.5, brkMin: 4, std: 6, door: 60, face: 10, call: 15, post: 500, got: 1, monthGot: 20 };
 const FACE = ['fng', 'again', 'got'];
 const WEEK = '日月火水木金土';
 // この日より前は、日報の出し忘れとして数えない（アプリを使い始めた日）
@@ -59,12 +59,27 @@ const S = {
 
 // ---------- 数字の計算 ----------
 function actOf(u){ const out = []; for (const d of S.acts) for (const k in d) { const v = d[k]; if (v && v.t && !v.x && v.r && v.u === u) out.push(v); } return out; }
-// 訪問の登録時刻から、訪販で動いていたかたまり（30分以上あいたら区切る）を出す
+// 訪問の登録時刻から、訪販で動いていた時間帯を出す。
+// ・20秒未満の間隔、または違う建物なのに1分未満の間隔は「あとからのまとめ入力」とみなす
+// ・始まり＝最初の本当の登録、終わり＝まとめ入力を除いた最後の登録
+// ・稼働時間＝終わり−始まり（休憩は別に引く。doorWork を参照）
+const FAST = 20000, MOVE = 60000;
 function doorBlocks(list){
-  const ts = list.map(x => +x.t).filter(Boolean).sort((a, b) => a - b); const out = []; let st = null, last = null;
-  for (const t of ts) { if (st == null) { st = last = t; continue; } if (t - last > 30 * 60000) { out.push([st, last + 5 * 60000]); st = t; } last = t; }
-  if (st != null) out.push([st, last + 5 * 60000]);
+  const xs = list.filter(x => +x.t).map(x => ({ t: +x.t, b: x.bid })).sort((a, b) => a.t - b.t);
+  const fast = xs.map((x, i) => i > 0 && (x.t - xs[i - 1].t < FAST || (x.b !== xs[i - 1].b && x.t - xs[i - 1].t < MOVE)));
+  // まとめ入力のかたまりの頭（1件目）も、まとめ入力の仲間とみなす
+  const inBatch = xs.map((x, i) => fast[i] || (fast[i + 1] && runLen(fast, i + 1) >= 3));
+  let run = 0, runMax = 0, batch = 0; fast.forEach(f => { run = f ? run + 1 : 0; runMax = Math.max(runMax, run); if (f) batch++; });
+  const real = xs.filter((x, i) => !inBatch[i]);
+  const out = real.length ? [[real[0].t, real[real.length - 1].t]] : [];
+  out.batch = batch; out.batchRun = runMax;
   return out;
+}
+function runLen(fast, i){ let n = 0; while (i < fast.length && fast[i]) { n++; i++; } return n; }
+// 訪販の稼働時間：始まりから終わりまでが「休憩を引き始める長さ」以上なら、休憩の時間を引く
+function doorWork(spanMs){
+  const g = S.goal || {}; const brk = (g.brk != null ? +g.brk : 1.5) * 3600000, min = (g.brkMin != null ? +g.brkMin : 4) * 3600000;
+  return spanMs >= min ? Math.max(0, spanMs - brk) : spanMs;
 }
 const CAL_K = { door: 'door', call: 'call', post: 'post', apo: 'other', other: 'other' };
 // 最後に動いた時刻（訪問の登録・開始/終了・反響・配布の記録）
@@ -92,7 +107,9 @@ function statOf(doc, live, u){
   const v = live ? visits(al) : Object.assign({ doors: 0, face: 0, got: 0 }, doc.v || {});
   // 訪販の時間：開始・終了ボタンの時間と、訪問マップの登録時刻から出した時間の、長い方
   const blocks = live ? doorBlocks(al) : [];
-  const span = live ? blocks.reduce((a, b) => a + b[1] - b[0], 0) : (+(doc.v && doc.v.span) || 0);
+  const raw = live ? blocks.reduce((a, b) => a + b[1] - b[0], 0) : (+(doc.v && doc.v.span) || 0);
+  const span = doorWork(raw);
+  const batchRun = live ? blocks.batchRun : (+(doc.v && doc.v.batchRun) || 0);
   const doorAuto = span > h.door;
   if (doorAuto) h.door = span;
   if (live && blocks.length && (first == null || blocks[0][0] < first)) first = blocks[0][0];
@@ -110,7 +127,7 @@ function statOf(doc, live, u){
   const ph = { door: 0, call: 0, post: 0, other: 0 };
   for (const p of plan) { const a = toMin(p.s), b = toMin(p.e === '24:00' ? '23:59' : p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
   const off = !!doc.off || !!(doc.cal && doc.cal.off && !own.length && !work);
-  return { h, work, running, first, v, han, post, postBy, got, plan, cal, own, ph, blocks, doorAuto, off, sub: doc.sub || 0, has: !!(plan.length || work || v.doors) };
+  return { h, work, running, first, v, han, post, postBy, got, plan, cal, own, ph, blocks, doorAuto, batchRun, off, sub: doc.sub || 0, has: !!(plan.length || work || v.doors) };
 }
 function targetsOf(st){
   const g = S.goal, out = [];
@@ -130,14 +147,14 @@ function myDays(){
   return m;
 }
 function sumRange(days, from, to, u){
-  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, plan: 0, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, days: 0, ok: 0, subs: 0, off: 0 };
+  const t = { h: { door: 0, call: 0, post: 0, other: 0 }, plan: 0, work: 0, doors: 0, face: 0, doorGot: 0, got: 0, post: 0, han: 0, call: 0, conn: 0, apo: 0, hgot: 0, days: 0, ok: 0, subs: 0, off: 0, batchDays: 0 };
   for (const d in days) {
     if (d < from || d > to) continue;
     const st = statOf(days[d], d === S.today, u);
     for (const k in t.h) t.h[k] += st.h[k];
     t.plan += Object.values(st.ph).reduce((a, b) => a + b, 0); t.work += st.work; t.doors += st.v.doors; t.face += st.v.face; t.doorGot += st.v.got; t.got += st.got; t.post += st.post;
     t.han += st.han.all; t.call += st.han.call; t.conn += st.han.conn; t.apo += st.han.apo; t.hgot += st.han.got;
-    if (st.work || st.v.doors) t.days++; if (st.sub) t.subs++; if (st.off) t.off++;
+    if (st.work || st.v.doors) t.days++; if (st.sub) t.subs++; if (st.off) t.off++; if (st.batchRun >= 5) t.batchDays++;
     if (achieved(targetsOf(st))) t.ok++;
   }
   return t;
@@ -221,6 +238,32 @@ function hanForm(run){
     } }, run ? '記録して終了する' : '記録する'),
     el('button', { class: 'btn wide', onclick: () => close() }, run ? 'まだ続ける（閉じる）' : 'やめる')
   ]);
+}
+// Googleカレンダーに予定を入れる：入力した内容でカレンダーの「予定を作成」画面を開く（本人のカレンダーに入る）
+function calForm(){
+  let k = 'door';
+  const now = new Date(); const nx = Math.min(22, now.getHours() + 1);
+  const s1 = el('input', { type: 'time', value: pad(nx) + ':00', 'aria-label': '始める時刻' });
+  const e1 = el('input', { type: 'time', value: pad(Math.min(23, nx + 3)) + ':00', 'aria-label': '終わる時刻' });
+  const memo = el('input', { type: 'text', placeholder: '例：青葉区 美しが丘、○○様 など（任意）' });
+  const chips = el('div', { class: 'chips' });
+  const KL = { door: '訪販', call: '反響', post: '配布', apo: 'アポ', other: 'その他' };
+  const draw = () => { chips.textContent = ''; Object.keys(KL).forEach(x => add(chips, el('button', { type: 'button', 'aria-pressed': String(x === k), onclick: () => { k = x; draw(); } }, KL[x]))); };
+  draw();
+  const close = modal('Googleカレンダーに予定を入れる', [
+    el('div', { class: 'field' }, 'やること', chips),
+    el('div', { class: 'pline' }, el('span', { class: 'tilde', style: 'grid-column:1/5;grid-row:1;justify-self:start', text: '時間' }), s1, el('span', { class: 'tilde', text: '〜' }), e1),
+    el('label', { class: 'field' }, 'メモ', memo),
+    el('div', { class: 'muted', text: '「カレンダーで開く」を押すと、Googleカレンダーの予定の作成画面が開きます。そこで「保存」を押してください。名前の頭に「訪販」などが入るので、アプリで種類ごとに数えられます。' }),
+    el('button', { class: 'btn primary wide', onclick: () => {
+      const a = toMin(s1.value), b = toMin(e1.value);
+      if (a == null || b == null || b <= a) { toast('終わる時刻は、始める時刻より後にしてください'); return; }
+      const d = S.today, f = t => d + 'T' + t.replace(':', '') + '00';
+      const title = KL[k] + (memo.value.trim() ? ' ' + memo.value.trim() : '');
+      const url = 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent(title) + '&dates=' + f(s1.value) + '/' + f(e1.value) + '&ctz=Asia/Tokyo&details=' + encodeURIComponent('業務管理アプリから');
+      window.open(url, '_blank', 'noopener'); close(); toast('カレンダーで「保存」を押してください');
+    } }, 'カレンダーで開く'),
+    el('button', { class: 'btn wide', onclick: () => close() }, 'やめる')]);
 }
 function areaNames(){
   const s = new Set();
@@ -404,7 +447,7 @@ function planList(st){
   const ses = Object.values((S.doc && S.doc.ses) || {});
   const fromCal = !st.own.length && st.cal.length;
   const sec = el('section', { class: 'card' }, el('h3', null, el('span', { class: 'h3t' }, '今日の予定', fromCal ? el('span', { class: 'gcal', text: 'Googleカレンダー' }) : null),
-    st.sub || fromCal ? null : el('button', { class: 'link', onclick: () => { S.editing = true; S.draft = null; render(); } }, '予定を直す')));
+    st.sub ? null : fromCal ? el('button', { class: 'link', onclick: () => calForm() }, '＋ カレンダーに足す') : el('button', { class: 'link', onclick: () => { S.editing = true; S.draft = null; render(); } }, '予定を直す')));
   for (const p of st.plan) {
     const mine = ses.filter(s => s.pid === p.id), run = mine.find(s => !s.en);
     const used = mine.reduce((a, s) => a + ((s.en || Date.now()) - s.st), 0);
@@ -563,9 +606,10 @@ function renderToday(main){
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
   else if (editing && !st.sub) add(main, planEditor());
   else if (st.plan.length) add(main, planList(st));
-  else if (!st.sub) add(main, el('section', { class: 'card' }, el('h3', { text: '今日の予定' }),
-    el('div', { class: 'muted', text: 'Googleカレンダーに今日の予定がありません。カレンダーに入れれば自動でここに出ます（10分ほどかかります）。' }),
-    el('div', { class: 'row' }, el('button', { class: 'btn', onclick: () => { S.editing = true; S.draft = null; render(); } }, 'アプリで予定を入れる'),
+  else if (!st.sub) add(main, el('section', { class: 'card forgot' }, el('h3', { text: '今日の予定、忘れていませんか？' }),
+    el('div', { class: 'muted', text: 'Googleカレンダーに今日の予定が入っていません。ここから入れられます（アプリに出るまで10分ほどかかります）。' }),
+    el('button', { class: 'btn primary wide', onclick: () => calForm() }, 'Googleカレンダーに予定を入れる'),
+    el('div', { class: 'row' },
       el('button', { class: 'btn', onclick: () => { if (confirm('今日は休みにしますか？（今日のお知らせは止まります）')) put(S.today, { off: true }, true); } }, '今日は休み')),
     keepOpen('adhoc2', el('details', null, el('summary', { text: '予定なしで仕事を開始する' }), el('div', { class: 'row', style: 'margin-top:8px' }, ['call', 'post', 'other'].map(k => el('button', { class: 'btn', onclick: () => startWork(k) }, KIND[k])))))));
   if (st.off && !editing) return;
@@ -689,9 +733,9 @@ function renderTeam(main){
 }
 function adminGame(){
   const g = S.goal; const inp = {}; const num = (k, v, step) => (inp[k] = el('input', { type: 'number', min: 0, step: step || 1, value: v }));
-  return keepOpen('admin', el('details', { class: 'card' }, el('summary', { text: '1日の目標の基準（代表）' }),
+  return keepOpen('admin', el('details', { class: 'card' }, el('summary', { text: '1日の目標の基準・訪販の休憩（代表）' }),
     el('div', { class: 'muted', text: '「1日＝基準の時間」働いたときの目標です。予定が短い日はその分少なくなります。' }),
-    [['std', '基準の時間（時間）', .5], ['door', '訪販：訪問数'], ['face', '訪販：対面数'], ['call', '反響対応：対応数'], ['post', '配布：枚数', 10], ['got', '獲得数'], ['monthGot', '1か月の獲得の目安']].map(([k, l, st]) => el('label', { class: 'gf' }, l, num(k, g[k], st))),
+    [['brk', '訪販の休憩として引く時間（時間）', .5], ['brkMin', '休憩を引き始める長さ（時間）', .5], ['std', '基準の時間（時間）', .5], ['door', '訪販：訪問数'], ['face', '訪販：対面数'], ['call', '反響対応：対応数'], ['post', '配布：枚数', 10], ['got', '獲得数'], ['monthGot', '1か月の獲得の目安']].map(([k, l, st]) => el('label', { class: 'gf' }, l, num(k, g[k], st))),
     el('button', { class: 'btn primary', onclick: async () => { const d = {}; for (const k in inp) { const v = parseFloat(inp[k].value); d[k] = isFinite(v) && v >= 0 ? v : GOAL_DEF[k]; } try { await FB.cfg.set('goal', d); toast('目標の基準を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, '保存する')));
 }
 
@@ -750,7 +794,7 @@ function renderAdmin(main){
     const need = Object.keys(x.days).filter(d => d >= r.from && d <= r.to && d < S.today && d >= START && x.days[d] && !x.days[d].off && statOf(x.days[d], false, x.u).has).length;
     const bar = (label, val, show, k, pk) => el('div', { class: 'pb' }, el('span', { text: label }), el('div', { class: 'pb-t' }, el('i', { style: `width:${Math.round((k === 'work' ? t.work : t[k]) / mx(k) * 100)}%` })), el('b', { text: show }), p ? delta(k === 'work' ? t.work : t[k], k === 'work' ? p.work : p[k]) : el('em'));
     add(main, el('section', { class: 'card person' },
-      el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}${t.plan ? `・予定 ${h1(t.plan)}h に対して実際 ${Math.round(t.work / t.plan * 100)}%` : ''}` })),
+      el('div', { class: 'ph' }, el('span', { class: 'av' + (t.got ? ' got' : ''), text: (x.name || '?').slice(0, 1) }), el('div', { class: 'pn' }, el('b', { text: x.name }), el('small', { text: `稼働 ${work.length}日・日報 ${t.subs}日${need > t.subs ? `（未提出 ${need - t.subs}日）` : ''}${t.plan ? `・予定 ${h1(t.plan)}h に対して実際 ${Math.round(t.work / t.plan * 100)}%` : ''}` }), t.batchDays ? el('span', { class: 'st warn', style: 'align-self:flex-start;margin-top:4px', text: `訪問マップのまとめ入力あり ${t.batchDays}日` }) : null),
         state ? el('span', { class: 'st ' + stCls(state), text: state }) : null),
       el('div', { class: 'pg vol' }, el('h4', { text: '仕事の量' }), bar('稼働', 0, h1(t.work) + 'h', 'work'), bar('訪問', 0, nf(t.doors), 'doors'), bar('反響対応', 0, nf(t.han), 'han'), bar('配布', 0, nf(t.post), 'post')),
       el('div', { class: 'pg res' }, el('h4', { text: '成果' }), bar('獲得', 0, nf(t.got), 'got'), bar('対面', 0, nf(t.face), 'face'), bar('アポ', 0, nf(t.apo), 'apo')),
