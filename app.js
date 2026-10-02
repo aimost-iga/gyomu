@@ -301,12 +301,8 @@ function render(){
   const main = $('#main'); const keep = window.scrollY;
   main.textContent = '';
   const days = myDays();
-  $('#who').textContent = `${ME.name}　${md(S.today)}`;
-  document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.tab === S.tab)));
-  if (S.tab === 'today') renderToday(main);
-  else if (S.tab === 'stats') renderStats(main, days);
-  else if (S.tab === 'team') renderTeam(main);
-  else renderSet(main);
+  $('#meBtn').setAttribute('aria-pressed', String(S.tab === 'set'));
+  if (S.tab === 'set') renderSet(main); else renderToday(main);
   window.scrollTo(0, keep);
 }
 const add = (box, ...xs) => { for (const x of xs.flat(3)) if (x != null && x !== false) box.append(x); };
@@ -380,8 +376,8 @@ function planList(st){
     const used = mine.reduce((a, s) => a + ((s.en || Date.now()) - s.st), 0);
     add(sec, el('div', { class: 'pitem' + (run ? ' on' : mine.length ? ' done' : '') },
       el('span', { class: 'dot', style: `background:${KC[p.k]}` }),
-      el('div', { class: 'pt' }, el('b', { text: `${p.s}〜${p.e} ${KIND[p.k]}` }), p.m ? el('small', { class: 'muted', text: p.m }) : null),
-      run ? el('span', { class: 'pst', text: '実行中' }) : mine.length ? el('span', { class: 'pst', text: `済（${hm(used)}）` }) : null,
+      el('div', { class: 'pt' }, el('b', { text: `${p.s}〜${p.e}　${KIND[p.k]}` }),
+        (p.m || mine.length) ? el('small', { class: 'muted' }, run ? el('span', { class: 'pst', text: '実行中　' }) : mine.length ? el('span', { class: 'pst', text: `済 ${hm(used)}　` }) : null, p.m || '') : null),
       !run && !st.sub ? el('button', { class: 'btn', onclick: () => startWork(p.k, p.id) }, mine.length ? '再開' : '開始') : null));
   }
   if (!st.sub && !st.running) add(sec, keepOpen('adhoc', el('details', null, el('summary', { text: '予定にない仕事を開始する' }),
@@ -486,6 +482,15 @@ function dayline(st){
       el('div', null, el('small', { text: '予定に対して' }), el('b', { text: planned ? Math.round(st.work / planned * 100) + '%' : '—' }))),
     track, ticks, legend);
 }
+// あいさつと日付
+function greet(st){
+  const d = toDate(S.today), h = new Date().getHours();
+  const hi = h < 11 ? 'おはようございます' : h < 18 ? 'おつかれさまです' : 'おつかれさまでした';
+  const state = st.running ? `${KIND[st.running.k]}中` : st.off ? '休み' : st.sub ? '日報提出済み' : st.work ? '稼働中断中' : st.plan.length ? '開始前' : '予定の申告前';
+  return el('section', { class: 'greet' },
+    el('div', { class: 'gdate' }, el('b', { text: `${d.getMonth() + 1}月${d.getDate()}日` }), el('span', { text: `${WEEK[d.getDay()]}曜日` })),
+    el('div', { class: 'ghi' }, `${hi}、${ME.name}さん`, el('span', { class: 'gst' + (st.running ? ' run' : st.sub ? ' ok' : ''), text: state })));
+}
 // 今日の数字（訪問マップと記録から自動）
 function metrics(st){
   const ts = st.off ? [] : targetsOf(st); const tg = l => ts.find(t => t.label === l);
@@ -511,8 +516,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  if (FB.isStaff()) loadWeek();
-  add(main, pushNotice(), yesterdayBox(), heroBox(st));
+  add(main, greet(st), pushNotice(), yesterdayBox(), heroBox(st));
   const editing = S.editing || (!st.off && !st.plan.length && !st.work);
   if (!st.off && (st.plan.length || st.work)) add(main, dayline(st), metrics(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('button', { class: 'btn', onclick: () => { S.editing = true; put(S.today, { off: false }, true); } }, '休みを取り消して予定を申告する')));
@@ -524,7 +528,6 @@ function renderToday(main){
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
   if (st.plan.length || st.work) add(main, reportBox(st));
-  add(main, feedBox());
 }
 
 // ===== 成績 =====
@@ -647,6 +650,7 @@ function adminGame(){
 
 // ===== 設定 =====
 function renderSet(main){
+  add(main, el('div', { class: 'sethead' }, el('button', { class: 'back', onclick: () => go('today'), 'aria-label': '今日の画面に戻る' }, '‹'), el('h1', { text: '設定' })));
   const ps = S.pushState;
   const pm = { granted: 'スマホにお知らせが届く状態です。', novapid: 'お知らせの許可は済んでいます（会社側の設定が終わると届き始めます）。', denied: 'お知らせが「許可しない」になっています。スマホの設定から、このアプリ（またはブラウザ）の通知を許可してください。', default: 'まだお知らせの許可をしていません。', needhome: 'iPhoneは、ホーム画面に追加したアイコンから開くと、お知らせを受け取れます。', unsupported: 'この端末ではスマホのお知らせが使えないため、メールでお知らせします。' }[ps] || '確認中…';
   add(main, el('section', { class: 'card' }, el('h3', { text: 'お知らせ' }), el('div', { text: pm }),
@@ -664,11 +668,10 @@ function renderSet(main){
     el('div', { class: 'muted', text: '先に入れておくと、その日はお知らせが届きません。' }),
     el('div', { class: 'row' }, di, el('button', { class: 'btn primary', onclick: () => { const d = di.value.replace(/-/g, ''); if (d.length !== 8 || d < S.today) { toast('今日以降の日を選んでください'); return; } put(d, { off: true }, true); toast(`${md(d)}を休みにしました`); } }, 'この日を休みにする')),
     offs.length ? offs.map(d => el('div', { class: 'rec' }, el('div', { class: 'rt', text: md(d) }), el('button', { class: 'btn', onclick: () => put(d, { off: false }, true) }, '取り消す'))) : el('div', { class: 'muted', text: '入っている休みはありません。' })));
-  const snd = el('input', { type: 'checkbox', id: 'snd', checked: store.get('sound', true), onchange: e => store.set('sound', e.target.checked) });
-  add(main, el('section', { class: 'card' }, el('h3', { text: 'この端末' }), el('label', { class: 'row', for: 'snd' }, snd, '達成したときに音を鳴らす'),
+  add(main, el('section', { class: 'card' }, el('h3', { text: 'アカウント' }),
     el('div', { class: 'row' }, el('a', { class: 'btn', href: 'guide.html' }, '使い方'), el('button', { class: 'btn', onclick: () => FB.signOut() }, 'ログアウト')),
     el('div', { class: 'muted', text: `ログイン中：${ME.email}` })));
-  if (FB.isAdmin()) add(main, notifySwitch(), rosterBox());
+  if (FB.isAdmin()) add(main, el('h2', { class: 'sh', text: '代表だけの設定' }), notifySwitch(), adminGame(), rosterBox());
 }
 // 自動のお知らせ・カレンダー反映を、代表が止めたり動かしたりする
 function notifySwitch(){
@@ -724,14 +727,15 @@ function pushAuto(){ const k = (S.appcfg && S.appcfg.vapid) || VAPID; if (pushTr
 window.addEventListener('push-in', e => { const d = e.detail || {}; toast(`${d.title || 'お知らせ'}：${d.body || ''}`); });
 
 // ---------- 起動 ----------
-function go(tab){ S.tab = tab; store.set('tab', tab); if (tab === 'team') { S.week = null; loadTeam(); } if (tab === 'stats' && !S.mine) loadMine(); render(); window.scrollTo(0, 0); }
-document.querySelectorAll('#tabs button').forEach(b => b.addEventListener('click', () => go(b.dataset.tab)));
+function go(tab){ S.tab = tab === 'set' ? 'set' : 'today'; render(); window.scrollTo(0, 0); }
+$('#meBtn').addEventListener('click', () => go(S.tab === 'set' ? 'today' : 'set'));
+$('#homeBtn').addEventListener('click', () => go('today'));
 setInterval(() => {
   document.querySelectorAll('.clock[data-st]').forEach(e => { e.textContent = clock(Date.now() - +e.dataset.st); });
   if (FB && ME && S.today && ymd(Date.now()) !== S.today) { S.draft = null; S.editing = false; S.week = null; watch(); }
 }, 1000);
 setInterval(() => { if (S.doc && Object.values(S.doc.ses || {}).some(s => !s.en)) rerender(); }, 60000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) { if (S.tab === 'team') loadTeam(true); rerender(); } });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ME) rerender(); });
 
 function gate(kind, email){
   const m = $('#main'); m.textContent = '';
@@ -745,12 +749,10 @@ async function boot(){
   const st = await FB.whenSignedIn();
   if (st.state !== 'in') { gate(st.state, st.email); return; }
   ME = st.me;
-  $('#tabs').hidden = false;
-  if (FB.isStaff()) $('#tabTeam').hidden = false;
-  const t = store.get('tab', 'today'); S.tab = (t === 'team' && !FB.isStaff()) ? 'today' : t;
+  $('#meBtn').hidden = false; $('#meIni').textContent = (ME.name || '?').slice(0, 1);
+  S.tab = 'today';
   watch();
   render();
-  if (S.tab === 'team') loadTeam();
 }
 boot().catch(e => { console.error(e); $('#main').textContent = '読み込めませんでした。開き直してください。'; });
 window.GY = { S, statOf, targetsOf, render };
