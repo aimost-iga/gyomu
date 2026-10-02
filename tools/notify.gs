@@ -22,8 +22,7 @@ const NT = {
   lateStart: 15,    // 予定の開始からこの分数たっても「開始」がない
   lateEnd: 30,      // 予定の終わりからこの分数たっても「終了」がない
   longRun: 4,       // 予定なしで始めて、この時間たっても「終了」がない
-  report: '20:30',  // 日報がまだ
-  yreport: ['08:30', '12:00'], // 昨日の日報がまだ（朝のうち）
+  yreport: ['08:30', '12:00'], // 昨日の配布の報告がまだ（朝のうち）
   summary: '08:30', // 代表へ昨日のまとめ
   weekly: '08:00'   // 月曜：本人へ先週の振り返り
 };
@@ -85,11 +84,10 @@ function tick_(now) {
         if (late) due.push(['end_' + running.id, `「${KIND_J[running.k] || ''}」の終了がまだです`, `${Utilities.formatDate(new Date(running.st), 'Asia/Tokyo', 'H:mm')}から続いています。終わっていたら「終了」を押して${running.k === 'call' || running.k === 'post' ? '結果を入れて' : ''}ください。`]);
       }
       postDue_(d, today, hhmm).forEach(x => due.push(['post', '配布の報告がまだです', `${x.s}〜${x.e}「${x.t}」の配布エリアと枚数を入れてください。配っていない・配布ではない予定なら、アプリでそう選べばお知らせは止まります。`]));
-      if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', '振り返りをひとこと書いて提出してください。1分で終わります。']);
+      // 日報はやめた（2026-10）
     }
     const y = ydays[u.email];
-    if (yday >= '20261003' && y && !y.off && !(y.cal && y.cal.off) && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length || (y.v && y.v.doors)) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
-      due.push(['yrep', '昨日の日報がまだです', 'アプリを開くと一番上に出ています。ひとことで出せます。']);
+
     if (yday >= '20261003' && y && !y.off && postDue_(y, yday, '24:30').length && hhmm >= NT.yreport[0])
       due.push(['ypost', '昨日の配布の報告がまだです', 'どのエリアに何枚配ったかを入れてください。アプリを開くと一番上に出ています。']);
 
@@ -185,7 +183,7 @@ function summary_(users, today) {
   const nt = getDoc_('ntc/' + y) || {};
   const rows = users.filter(u => u.nt !== false).map(u => {
     const d = getDoc_('day/' + y + '_' + ukey_(u.email)); const s = stat_(d);
-    const state = s.off ? '休み' : s.sub ? '日報済み' : (s.plan || s.work) ? '<b style="color:#c0392b">日報なし</b>' : '<b style="color:#c0392b">申告なし</b>';
+    const state = s.off ? '休み' : (s.plan || s.work || s.v.doors) ? '稼働' : '<b style="color:#c0392b">申告なし</b>';
     return { u, s, state, refl: d && d.refl ? d.refl : '', nag: (nt[ukey_(u.email)] || {}).total || 0 };
   });
   const td = 'style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right"', th = 'style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:left"';
@@ -219,7 +217,7 @@ function weekly_(u, today) {
   if (w1.han || w0.han) html += `<li>反響対応：<b>${w1.han}件</b>${cmp(w1.han, w0.han)}・アポ ${w1.apo}</li>`;
   if (w1.post || w0.post) html += `<li>配布：<b>${w1.post}枚</b>${cmp(w1.post, w0.post)}</li>`;
   html += `<li>獲得：<b>${w1.got}件</b>${cmp(w1.got, w0.got)}</li>`;
-  html += `<li>日報 ${w1.subs}日・休み ${w1.offs}日${w1.none ? `・<b style="color:#c0392b">申告なし ${w1.none}日</b>` : ''}</li></ul>`;
+  html += `<li>休み ${w1.offs}日${w1.none ? `・<b style="color:#c0392b">申告なし ${w1.none}日</b>` : ''}</li></ul>`;
   html += '<p>くわしくはアプリの「成績」で。今週もいきましょう！</p>';
   mail_(u, '先週の振り返り', html);
 }
