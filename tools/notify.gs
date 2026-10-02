@@ -44,10 +44,14 @@ function tick() {
 function testPush() { const u = { email: OWNER_MAIL, name: '代表' }; log_('試しのお知らせ：' + send_(u, '試しのお知らせ', 'これが見えていればスマホのお知らせは届いています。', 'test')); }
 
 function tick_(now) {
-  // カレンダーの読み取りは、お知らせのオン・オフに関係なくいつも行う（分析のため）
+  // アプリで「まとめて入れる」を押した予定をGoogleカレンダーに入れる → カレンダーを読む → 配布エリアの台帳を読む
+  // （お知らせのオン・オフに関係なくいつも行う）
+  try { loadKw_(); } catch (e) {}
+  try { processAdds_(now); } catch (e) { log_('カレンダーへの登録の失敗：' + e.message); }
   try { readCals_(now); } catch (e) { log_('カレンダー読み取りの失敗：' + e.message); }
   // 代表がアプリの「設定」で「動かす」にするまでは、お知らせはしない
   const appCfg = getDoc_('cfg/app') || {};
+  try { readAreas_(now); } catch (e) { log_('配布エリアの台帳の読み取りの失敗：' + e.message); }
   if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
   const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
@@ -79,11 +83,14 @@ function tick_(now) {
         const late = en ? now.getTime() >= en.getTime() + NT.lateEnd * 60000 : now.getTime() - running.st >= NT.longRun * 3600000;
         if (late) due.push(['end_' + running.id, `「${KIND_J[running.k] || ''}」の終了がまだです`, `${Utilities.formatDate(new Date(running.st), 'Asia/Tokyo', 'H:mm')}から続いています。終わっていたら「終了」を押して${running.k === 'call' || running.k === 'post' ? '結果を入れて' : ''}ください。`]);
       }
+      postDue_(d, today, hhmm).forEach(x => due.push(['post', '配布の報告がまだです', `${x.s}〜${x.e}「${x.t}」の配布エリアと枚数を入れてください。配っていない・配布ではない予定なら、アプリでそう選べばお知らせは止まります。`]));
       if (hhmm >= NT.report && active && !d.sub) due.push(['rep', '今日の日報がまだです', '振り返りをひとこと書いて提出してください。1分で終わります。']);
     }
     const y = ydays[u.email];
     if (yday >= '20261003' && y && !y.off && !(y.cal && y.cal.off) && !y.sub && (Object.keys(y.plan || {}).length || Object.keys(y.ses || {}).length || (y.v && y.v.doors)) && hhmm >= NT.yreport[0] && hhmm < NT.yreport[1])
       due.push(['yrep', '昨日の日報がまだです', 'アプリを開くと一番上に出ています。ひとことで出せます。']);
+    if (yday >= '20261003' && y && !y.off && postDue_(y, yday, '24:30').length && hhmm >= NT.yreport[0])
+      due.push(['ypost', '昨日の配布の報告がまだです', 'どのエリアに何枚配ったかを入れてください。アプリを開くと一番上に出ています。']);
 
     due.forEach(([kind, title, body]) => {
       const key = 'r_' + today + '_' + uk + '_' + kind;
@@ -94,7 +101,7 @@ function tick_(now) {
       const v = n + '|' + now.getTime(); P.setProperty(key, v); props[key] = v;
       const c = counts[uk] = counts[uk] || {}; const kk = kind.split('_')[0]; c[kk] = (c[kk] || 0) + 1;
       if (n === NT.escalate && u.email !== OWNER_MAIL) {
-        const what = { plan: '今日の予定の申告', start: '開始', end: '終了', rep: '今日の日報', yrep: '昨日の日報' }[kk];
+        const what = { plan: '今日の予定の申告', start: '開始', end: '終了', rep: '今日の日報', yrep: '昨日の日報', post: '配布の報告', ypost: '昨日の配布の報告' }[kk];
         send_({ email: OWNER_MAIL, name: '代表' }, `${u.name}さん：${what}がまだです`, `${NT.escalate}回お知らせしても入っていません（${how}で送信）。`, 'esc');
       }
     });
@@ -219,9 +226,26 @@ function weekly_(u, today) {
 // ---------- Googleカレンダーの読み取り ----------
 // 各自が代表に共有したカレンダーを読み、その日の予定を day/<日付>_<人> の cal に書く。
 // 名簿で「仕事用カレンダー」を指定した人はそれを、なければ本人のメールのカレンダーを読む。
-const CAL_KIND = [['door', /訪販|訪問|ドア|ローラー/], ['call', /反響|架電|電話|コール|テレ/], ['post', /配布|ポスティング|ポスト|チラシ/], ['apo', /アポ|商談|面談|訪問予約/]];
+// 予定の名前の言葉で種類を決める。代表がアプリの管理画面で言葉を変えられる（cfg/app.kw）
+const KW_DEF = { door: '訪販,訪問,ドア,ローラー', call: '反響,架電,電話,コール,テレ', post: '配布,ポスティング,ポス,チラシ', apo: 'アポ,商談,面談', ng: '' };
+let KW = null;
+function loadKw_() { const c = getDoc_('cfg/app') || {}; KW = Object.assign({}, KW_DEF, c.kw || {}); }
+const kwList_ = s => String(s || '').split(/[,、，\n]/).map(x => x.trim()).filter(Boolean);
 const OFF_RE = /休み|休暇|有給|公休|休日|OFF|オフ/i;
-function calKind_(t) { for (const [k, re] of CAL_KIND) if (re.test(t)) return k; return 'other'; }
+function calKind_(t) {
+  const kw = KW || KW_DEF; const has = k => kwList_(kw[k]).some(w => t.indexOf(w) >= 0);
+  for (const k of ['door', 'call', 'post', 'apo']) { if (k === 'post' && kwList_(kw.ng).some(w => t.indexOf(w) >= 0)) continue; if (has(k)) return k; }
+  return 'other';
+}
+// 予定ごとの印（アプリ側の sigOf と同じ計算）
+function sig_(e) { const s = e.s + '|' + e.e + '|' + e.t; let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return 'x' + h.toString(36); }
+// 配布の予定が終わっているのに、配布の報告も「配っていない」もない
+function postDue_(d, day, hhmm) {
+  d = d || {}; if (Object.keys(d.post || {}).length || d.pnone) return [];
+  const fix = d.fix || {};
+  return ((d.cal && d.cal.ev) || []).filter(e => (fix[sig_(e)] || calKind_(e.t)) === 'post' && (e.e === '24:00' ? '23:59' : e.e) <= addMin_(hhmm, -30));
+}
+function addMin_(hm, n) { const m = Math.max(0, Math.min(1439, +hm.slice(0, 2) * 60 + +hm.slice(3, 5) + n)); return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + m % 60).slice(-2); }
 function readCals_(now) {
   const users = people_();
   const P = PropertiesService.getScriptProperties();
@@ -276,6 +300,100 @@ function writeCalDay_(u, uk, day, list, off) {
   const body = { fields: { u: { stringValue: u.email }, d: { stringValue: day }, cal: { mapValue: { fields: { ev: { arrayValue: { values: evF } }, off: { booleanValue: off }, at: { integerValue: String(Date.now()) } } } } } };
   fsFetch_(FS + '/day/' + day + '_' + uk + '?updateMask.fieldPaths=u&updateMask.fieldPaths=d&updateMask.fieldPaths=cal', { method: 'patch', payload: JSON.stringify(body) });
   P.setProperty(key, sig);
+}
+
+// ---------- アプリから「まとめて入れる」予定をGoogleカレンダーへ ----------
+// アプリは day/<日付>_<人> に add.<id> = {k,s,e,t} と q=true を書く。ここで本人のカレンダーに入れて st を書き戻す。
+// 本人のカレンダーを「変更」できる共有なら本人のカレンダーに直接。できなければ「AImost 業務予定」に本人を招待して入れる。
+function processAdds_(now) {
+  const res = fsFetch_(FS + ':runQuery', { method: 'post', payload: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'day' }], where: { fieldFilter: { field: { fieldPath: 'q' }, op: 'EQUAL', value: { booleanValue: true } } }, limit: 200 } }) }) || [];
+  const users = {}; people_().forEach(u => { users[u.email] = u; });
+  res.forEach(r => {
+    if (!r.document) return;
+    const id = r.document.name.split('/').pop(); const d = doc_(r.document);
+    const u = users[d.u] || { email: d.u, name: d.u };
+    const fields = {}, mask = [];
+    Object.keys(d.add || {}).forEach(aid => {
+      const a = d.add[aid]; if (!a || a.st) return;
+      const st = at_(d.d, a.s), en = at_(d.d, a.e === '24:00' ? '23:59' : a.e);
+      let out = { st: 'ng', why: '時間が読めません' };
+      if (st && en && en > st) out = addEvent_(u, a.t || KIND_J[a.k] || '予定', st, en);
+      const o = Object.assign({}, a, out, { done: now.getTime() });
+      fields[aid] = toFs_(o); mask.push('add.' + aid);
+    });
+    const body = { fields: { q: { booleanValue: false } } }; mask.push('q');
+    if (Object.keys(fields).length) body.fields.add = { mapValue: { fields: fields } };
+    fsFetch_(FS + '/day/' + id + '?' + mask.map(m => 'updateMask.fieldPaths=' + m).join('&'), { method: 'patch', payload: JSON.stringify(body) });
+  });
+}
+function addEvent_(u, title, st, en) {
+  const desc = '業務管理アプリから入れた予定です。\n' + APP_URL;
+  try {
+    const cal = CalendarApp.getCalendarById((u.cal || u.email).trim());
+    if (cal) { const ev = cal.createEvent(title, st, en, { description: desc }); return { st: 'ok', how: 'own', eid: ev.getId() }; }
+  } catch (e) {}
+  try {
+    const guests = u.email === OWNER_MAIL ? '' : u.email;
+    const ev = cal_().createEvent(title, st, en, { guests, sendInvites: false, description: desc + '\n（' + u.name + 'さんの予定）' });
+    return { st: 'ok', how: 'inv', eid: ev.getId() };
+  } catch (e) { return { st: 'ng', why: String(e.message).slice(0, 80) }; }
+}
+function toFs_(v) {
+  if (v == null) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(toFs_) } };
+  if (typeof v === 'object') { const f = {}; Object.keys(v).forEach(k => { f[k] = toFs_(v[k]); }); return { mapValue: { fields: f } }; }
+  return { stringValue: String(v) };
+}
+
+// ---------- 配布エリアの台帳（ソニーの期間ごとのエリアのリスト） ----------
+// 代表がアプリで期間ごとにスプレッドシートのURLを登録（cfg/area.per）→ ここで「住所」の列から市区町村（政令市は区まで）を数えて cfg/areas に書く
+const SEIREI = ['札幌市', '仙台市', 'さいたま市', '千葉市', '川崎市', '横浜市', '相模原市', '新潟市', '静岡市', '浜松市', '名古屋市', '京都市', '大阪市', '堺市', '神戸市', '岡山市', '広島市', '北九州市', '福岡市', '熊本市'];
+function areaOf_(addr) {
+  let a = String(addr || '').normalize('NFKC').replace(/[\s　]/g, '');
+  a = a.replace(/^(東京都|北海道|(?:京都|大阪)府|.{2,3}県)/, '');
+  for (const c of SEIREI) if (a.indexOf(c) === 0) { const m = a.slice(c.length).match(/^(.+?区)/); return c + (m ? m[1] : ''); }
+  const m = a.match(/^(?:.+?郡)?(.+?[市区町村])/);
+  return m ? m[1] : '';
+}
+function readAreas_(now) {
+  const cfg = getDoc_('cfg/area'); if (!cfg || !cfg.per) return;
+  const P = PropertiesService.getScriptProperties(); const today = ymdJst_(now);
+  const cur = getDoc_('cfg/areas') || {};
+  const fields = {}, mask = [];
+  (cfg.per || []).forEach(p => {
+    if (!p || !p.id || !p.url) return;
+    const key = 'area_' + p.id, want = p.url + '|' + (p.req || '') + '|' + today.slice(0, 8);
+    if (P.getProperty(key) === want && cur[p.id]) return;
+    let out;
+    try { out = sheetAreas_(p.url); } catch (e) { out = { err: String(e.message).slice(0, 120), areas: [] }; }
+    out.at = now.getTime(); out.url = p.url;
+    fields[p.id] = toFs_(out); mask.push(p.id); P.setProperty(key, want);
+  });
+  if (mask.length) fsFetch_(FS + '/cfg/areas?' + mask.map(m => 'updateMask.fieldPaths=' + m).join('&'), { method: 'patch', payload: JSON.stringify({ fields }) });
+}
+function sheetAreas_(url) {
+  const ss = SpreadsheetApp.openByUrl(url);
+  const by = {}, seen = {}; let rows = 0;
+  ss.getSheets().forEach(sh => {
+    const n = sh.getLastRow(), c = sh.getLastColumn(); if (n < 2 || c < 2) return;
+    const v = sh.getRange(1, 1, Math.min(n, 3000), Math.min(c, 30)).getValues();
+    let hr = -1, ca = -1, cid = -1, chh = -1, cty = -1;
+    for (let r = 0; r < Math.min(5, v.length) && hr < 0; r++) v[r].forEach((x, i) => { const t = String(x).replace(/\s/g, ''); if (t === '住所' || (ca < 0 && /住所/.test(t))) { hr = r; ca = i; } });
+    if (hr < 0) return;
+    v[hr].forEach((x, i) => { const t = String(x).replace(/\s/g, ''); if (/棟ID/.test(t)) cid = i; if (/総戸数/.test(t)) chh = i; if (/分賃/.test(t)) cty = i; });
+    for (let r = hr + 1; r < v.length; r++) {
+      const ad = v[r][ca]; if (!ad) continue;
+      const id = cid >= 0 ? String(v[r][cid]) : ''; if (id && seen[id]) continue; if (id) seen[id] = 1;
+      const a = areaOf_(ad); if (!a) continue;
+      const o = by[a] = by[a] || { a, b: 0, h: 0, bu: 0 };
+      o.b++; o.h += Number(v[r][chh]) || 0; if (cty >= 0 && /分譲/.test(String(v[r][cty]))) o.bu++;
+      rows++;
+    }
+  });
+  const areas = Object.keys(by).map(k => by[k]).sort((x, y) => y.h - x.h || y.b - x.b).slice(0, 300);
+  return { areas, rows, name: ss.getName() };
 }
 
 // ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------

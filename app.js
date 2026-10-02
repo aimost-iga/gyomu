@@ -82,6 +82,37 @@ function doorWork(spanMs){
   return spanMs >= min ? Math.max(0, spanMs - brk) : spanMs;
 }
 const CAL_K = { door: 'door', call: 'call', post: 'post', apo: 'other', other: 'other' };
+// 予定の名前の言葉で種類を決める（代表が管理画面で言葉を変えられる。Apps Script の KW_DEF と同じ）
+const KW_DEF = { door: '訪販,訪問,ドア,ローラー', call: '反響,架電,電話,コール,テレ', post: '配布,ポスティング,ポス,チラシ', apo: 'アポ,商談,面談', ng: '' };
+const kwList = v => String(v || '').split(/[,、，\n]/).map(x => x.trim()).filter(Boolean);
+function kindOf(t){
+  const kw = Object.assign({}, KW_DEF, (S.appcfg && S.appcfg.kw) || {}); t = String(t || '');
+  for (const k of ['door', 'call', 'post', 'apo']) { if (k === 'post' && kwList(kw.ng).some(w => t.includes(w))) continue; if (kwList(kw[k]).some(w => t.includes(w))) return k; }
+  return 'other';
+}
+// 予定ごとの印（Apps Script の sig_ と同じ計算）
+function sigOf(e){ const s = e.s + '|' + e.e + '|' + e.t; let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return 'x' + h.toString(36); }
+// カレンダーの予定（種類は名前の言葉か、本人が直した種類）＋アプリから入れてカレンダー待ちの予定
+function calEv(doc){
+  if (!doc) return [];
+  const fix = doc.fix || {};
+  const out = ((doc.cal && doc.cal.ev) || []).map(e => { const sig = sigOf(e); return { s: e.s, e: e.e, t: e.t, sig, k: fix[sig] || kindOf(e.t), fixed: !!fix[sig] }; });
+  for (const id in (doc.add || {})) { const a = doc.add[id]; if (a && !a.st) out.push({ s: a.s, e: a.e, t: a.t, sig: 'a' + id, k: a.k, wait: 1 }); }
+  return out.sort((a, b) => a.s < b.s ? -1 : 1);
+}
+// 配布の予定が終わったのに、配布の報告も「配っていない」もない予定
+function postDue(doc, d){
+  if (!doc || doc.off || doc.pnone || Object.keys(doc.post || {}).length) return [];
+  const nowM = d < S.today ? 1e9 : d > S.today ? -1 : new Date().getHours() * 60 + new Date().getMinutes();
+  return calEv(doc).filter(e => e.k === 'post' && !e.wait && toMin(e.e === '24:00' ? '23:59' : e.e) <= nowM);
+}
+// その日の期間の配布エリア（ポスティング台帳から）
+function areasFor(d){
+  const per = ((S.area && S.area.per) || []).filter(p => p && d.slice(0, 6) >= p.from && d.slice(0, 6) <= p.to);
+  const m = new Map();
+  per.forEach(p => { const r = (S.areas || {})[p.id]; ((r && r.areas) || []).forEach(a => { const o = m.get(a.a); if (o) { o.b += a.b; o.h += a.h; } else m.set(a.a, Object.assign({}, a)); }); });
+  return { per, list: [...m.values()].sort((a, b) => b.h - a.h) };
+}
 // 最後に動いた時刻（訪問の登録・開始/終了・反響・配布の記録）
 function lastMove(doc, st){
   let t = 0;
@@ -122,7 +153,7 @@ function statOf(doc, live, u){
   const work = h.door + h.call + h.post + h.other;
   const own = Object.entries(doc.plan || {}).map(([id, p]) => Object.assign({ id }, p)).sort((a, b) => (toMin(a.s) || 0) - (toMin(b.s) || 0));
   // カレンダーの予定（共有されたGoogleカレンダーから自動で入る）
-  const cal = ((doc.cal && doc.cal.ev) || []).map((e, i) => ({ id: 'c' + i, k: CAL_K[e.k] || 'other', s: e.s, e: e.e, m: e.t, cal: 1, apo: e.k === 'apo' }));
+  const cal = calEv(doc).map((e, i) => ({ id: 'c' + i, k: CAL_K[e.k] || 'other', s: e.s, e: e.e, m: e.t, cal: 1, apo: e.k === 'apo', wait: e.wait, sig: e.sig, ck: e.k }));
   const plan = own.length ? own : cal;
   const ph = { door: 0, call: 0, post: 0, other: 0 };
   for (const p of plan) { const a = toMin(p.s), b = toMin(p.e === '24:00' ? '23:59' : p.e); if (a != null && b != null && b > a) ph[p.k] = (ph[p.k] || 0) + (b - a) * 60000; }
@@ -270,31 +301,138 @@ function areaNames(){
   for (const d of Object.values(myDays())) for (const id in (d.post || {})) if (d.post[id].a) s.add(d.post[id].a);
   return [...s].slice(-40);
 }
-function postForm(run){
-  let ty = store.get('postTy', '分譲');
-  const area = el('input', { type: 'text', placeholder: '例：横浜市青葉区 美しが丘', list: 'gyAreas' });
-  const dl = el('datalist', { id: 'gyAreas' }, areaNames().map(a => el('option', { value: a })));
+// 配布の報告：その日の期間の配布エリア（台帳）から選ぶ。リストにないエリアは手で入れる
+function postForm(run, day, ev){
+  day = day || S.today;
+  let ty = store.get('postTy', '分譲'), pick = '';
+  const ar = areasFor(day);
+  // 予定の名前にエリアが入っていれば、最初から選んでおく（例：「ポス 戸田市」→ 戸田市、「配布 青葉区」→ 横浜市青葉区）
+  if (ev && ev.t) { const hit = ar.list.find(a => ev.t.includes(a.a) || ev.t.includes(a.a.replace(/^.+?市(?=.+区$)/, ''))); if (hit) pick = hit.a; }
+  const done = new Set(Object.values((myDays()[day] || {}).post || {}).map(p => p.a));
+  const area = el('input', { type: 'text', placeholder: ar.list.length ? 'リストにないときは、ここに入れる' : '例：横浜市青葉区 美しが丘', list: 'gyAreas' });
+  const dl = el('datalist', { id: 'gyAreas' }, [...new Set(areaNames().concat(ar.list.map(a => a.a)))].map(a => el('option', { value: a })));
+  const flt = el('input', { type: 'search', placeholder: '絞り込み（例：青葉）', 'aria-label': 'エリアを絞り込む' });
+  const grid = el('div', { class: 'achips' });
+  const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q)).slice(0, 60).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
+  flt.addEventListener('input', drawAreas); area.addEventListener('input', () => { if (area.value.trim()) { pick = ''; drawAreas(); } });
+  drawAreas();
   const num = el('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: '例：400' });
   const chips = el('div', { class: 'chips' });
   const drawChips = () => { chips.textContent = ''; POST_TY.forEach(t => add(chips, el('button', { type: 'button', 'aria-pressed': String(t === ty), onclick: () => { ty = t; store.set('postTy', t); drawChips(); } }, t))); };
   drawChips();
-  const close = modal(run ? '配布の結果を入れて終了' : '配布を記録', [
-    el('label', { class: 'field' }, '配ったエリア（市区町村・町名）', area, dl),
+  const save = more => {
+    const n = parseInt(num.value, 10); const a = (pick || area.value.trim());
+    if (!a) { toast('配ったエリアを選ぶか入れてください'); return; }
+    if (!(n > 0)) { toast('配った枚数を入れてください'); num.focus(); return; }
+    const p = { a, ty, n, t: Date.now() }; if (run) p.sid = run.id; if (pick) p.list = 1; if (ev) p.ev = ev.sig;
+    close();
+    const patch = { post: { [uid()]: p } };
+    if (run) endSession(patch); else { put(day, patch); toast(`${a} ${nf(n)}枚を記録しました`); }
+    if (more) setTimeout(() => postForm(null, day, ev), 300);
+  };
+  const close = modal(run ? '配布の結果を入れて終了' : `配布の報告${day !== S.today ? '（' + md(day) + '）' : ''}`, [
+    ev ? el('div', { class: 'muted', text: `予定：${ev.s}〜${ev.e}「${ev.t}」` }) : null,
+    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}の台帳）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアの台帳がまだ登録されていません。下に入れてください。' })),
+    el('label', { class: 'field' }, ar.list.length ? 'リストにないエリア' : 'エリア（市区町村・町名）', area, dl),
     el('div', { class: 'field' }, '建物の種類', chips),
     el('label', { class: 'field' }, '配った枚数', num),
-    el('button', { class: 'btn primary wide', onclick: () => {
-      const n = parseInt(num.value, 10);
-      if (!(n >= 0) || num.value === '') { toast('配った枚数を入れてください'); num.focus(); return; }
-      if (!area.value.trim() && n > 0) { toast('配ったエリアを入れてください'); area.focus(); return; }
-      const p = { a: area.value.trim(), ty, n, t: Date.now() }; if (run) p.sid = run.id;
-      close();
-      const patch = { post: { [uid()]: p } };
-      if (run) endSession(patch); else { put(S.today, patch); toast(`${nf(n)}枚の配布を記録しました`); }
-    } }, run ? '記録して終了する' : '記録する'),
-    run ? el('div', { class: 'muted', text: '複数のエリアを配ったときは、終了したあと「配布を足す」で残りを入れてください。' }) : null,
+    el('button', { class: 'btn primary wide', onclick: () => save(false) }, run ? '記録して終了する' : '記録する'),
+    run ? null : el('button', { class: 'btn wide', onclick: () => save(true) }, '記録して、別のエリアも入れる'),
     el('button', { class: 'btn wide', onclick: () => close() }, run ? 'まだ続ける（閉じる）' : 'やめる')
   ]);
-  setTimeout(() => area.focus(), 50);
+  setTimeout(() => (pick ? num : ar.list.length ? flt : area).focus(), 50);
+}
+// 「配布」と判定された予定を直す：配布ではない／配っていない
+function notPostForm(day, evs){
+  const KL = { door: '訪販', call: '反響対応', apo: 'アポ・商談', other: 'その他（配布ではない）' };
+  const why = el('input', { type: 'text', placeholder: '例：雨で中止、チラシが届かなかった' });
+  const close = modal('この予定は配布ではない・配っていない', [
+    el('div', { class: 'muted', text: evs.map(e => `${e.s}〜${e.e}「${e.t}」`).join('　') }),
+    el('div', { class: 'field' }, '配布ではない予定だった（種類を直す）', el('div', { class: 'chips' }, Object.keys(KL).map(k => el('button', { type: 'button', onclick: () => {
+      const fix = {}; evs.forEach(e => { fix[e.sig] = k; }); close(); put(day, { fix }); toast(`「${KL[k]}」に直しました`);
+    } }, KL[k])))),
+    el('label', { class: 'field' }, '配布の予定だったが、配っていない（理由）', why),
+    el('button', { class: 'btn wide', onclick: () => { if (!why.value.trim()) { toast('配っていない理由を入れてください'); why.focus(); return; } close(); put(day, { pnone: why.value.trim() }); toast('「配っていない」で記録しました'); } }, '配っていないで記録する'),
+    el('button', { class: 'btn wide', onclick: () => close() }, 'やめる')]);
+}
+// カレンダーの予定の種類を直す（言葉で自動判定した種類がちがうとき）
+function kindFix(day, p){
+  const KL = { door: '訪販', call: '反響対応', post: '配布', apo: 'アポ・商談', other: 'その他' };
+  const close = modal('この予定の種類を直す', [
+    el('div', { class: 'muted', text: `${p.s}〜${p.e}「${p.m}」は、いま「${KL[p.ck] || 'その他'}」として数えています。` }),
+    el('div', { class: 'chips' }, Object.keys(KL).map(k => el('button', { type: 'button', 'aria-pressed': String(k === p.ck), onclick: () => { close(); put(day, { fix: { [p.sig]: k } }); toast(`「${KL[k]}」に直しました`); } }, KL[k]))),
+    el('div', { class: 'muted', text: '名前の言葉で自動で決めています。いつも間違う言葉があれば、代表に伝えてください（管理の画面で言葉を直せます）。' }),
+    el('button', { class: 'btn wide', onclick: () => close() }, 'やめる')]);
+}
+// 配布の報告がまだの日（今日・使い始めてからの日）
+function postDueBox(){
+  const days = myDays(); const out = [];
+  Object.keys(days).filter(d => d <= S.today && (d >= START || d === S.today) && d >= addDays(S.today, -31)).sort().forEach(d => { const l = postDue(days[d], d); if (l.length) out.push([d, l]); });
+  if (!out.length) return null;
+  return el('section', { class: 'card bad' }, el('h3', null, '配布の報告がまだです', el('small', { text: '入れるまでお知らせが届きます' })),
+    el('div', { class: 'muted', text: 'カレンダーに配布・ポスティングの予定がありました。どのエリアに何枚配ったかを入れてください。' }),
+    out.map(([d, l]) => el('div', { class: 'due' },
+      el('div', { class: 'due-h' }, el('b', { text: d === S.today ? '今日' : md(d) }), el('span', { text: l.map(e => `${e.s}〜${e.e} ${e.t}`).join('／') })),
+      el('div', { class: 'row' }, el('button', { class: 'btn primary', onclick: () => postForm(null, d, l[0]) }, 'エリアと枚数を入れる'), el('button', { class: 'link', onclick: () => notPostForm(d, l) }, '配布ではない・配っていない')))));
+}
+// 予定をまとめてGoogleカレンダーに入れる：日付にチェック → 種類・時間・メモ → まとめて登録
+function bulkForm(){
+  let k = store.get('bulkK', 'door'), mOff = 0; const picked = new Set();
+  const KL = { door: '訪販', post: '配布', call: '反響', apo: 'アポ', other: 'その他' };
+  const days = myDays();
+  const s1 = el('input', { type: 'time', value: store.get('bulkS', '10:00'), 'aria-label': '始める時刻' });
+  const e1 = el('input', { type: 'time', value: store.get('bulkE', '18:00'), 'aria-label': '終わる時刻' });
+  const memo = el('input', { type: 'text', placeholder: '例：横浜市青葉区（任意）', list: 'gyAreas2' });
+  const dl = el('datalist', { id: 'gyAreas2' });
+  const chips = el('div', { class: 'chips' }); const cal = el('div', { class: 'mcal' }); const btn = el('button', { class: 'btn primary wide' });
+  const drawChips = () => { chips.textContent = ''; Object.keys(KL).forEach(x => add(chips, el('button', { type: 'button', 'aria-pressed': String(x === k), onclick: () => { k = x; store.set('bulkK', k); drawChips(); } }, KL[x]))); };
+  const drawCal = () => {
+    cal.textContent = '';
+    const t = toDate(S.today); const first = new Date(t.getFullYear(), t.getMonth() + mOff, 1); const y = first.getFullYear(), m = first.getMonth();
+    add(cal, el('div', { class: 'mc-h' }, el('button', { type: 'button', class: 'mc-nav', disabled: mOff <= 0, 'aria-label': '前の月', onclick: () => { mOff--; drawCal(); } }, '‹'), el('b', { text: `${y}年${m + 1}月` }), el('button', { type: 'button', class: 'mc-nav', disabled: mOff >= 2, 'aria-label': '次の月', onclick: () => { mOff++; drawCal(); } }, '›')));
+    const g = el('div', { class: 'mc-g' }); '月火水木金土日'.split('').forEach(w => add(g, el('span', { class: 'mc-w', text: w })));
+    for (let i = 0; i < (first.getDay() + 6) % 7; i++) add(g, el('span'));
+    const last = new Date(y, m + 1, 0).getDate();
+    for (let dd = 1; dd <= last; dd++) {
+      const d = ymd(new Date(y, m, dd)); const doc = days[d]; const ev = calEv(doc);
+      const off = doc && (doc.off || (doc.cal && doc.cal.off)); const wd = new Date(y, m, dd).getDay();
+      add(g, el('button', { type: 'button', class: 'mc-d' + (wd === 0 ? ' sun' : wd === 6 ? ' sat' : '') + (d === S.today ? ' today' : ''), disabled: d < S.today, 'aria-pressed': String(picked.has(d)), 'aria-label': `${md(d)}${ev.length ? ' 予定あり' : ''}${off ? ' 休み' : ''}`,
+        onclick: () => { picked.has(d) ? picked.delete(d) : picked.add(d); drawCal(); } }, el('span', { text: String(dd) }), off ? el('small', { text: '休' }) : ev.length ? el('i', { class: 'mc-dots' }, [...new Set(ev.map(e => e.k))].slice(0, 3).map(x => el('b', { style: `background:${CKC[x] || CKC.other}` }))) : null));
+    }
+    add(cal, g, el('div', { class: 'row mc-q' }, el('button', { type: 'button', class: 'link', onclick: () => { for (let dd = 1; dd <= last; dd++) { const dt = new Date(y, m, dd); const d = ymd(dt); if (d >= S.today && dt.getDay() > 0 && dt.getDay() < 6 && !(days[d] && (days[d].off || (days[d].cal && days[d].cal.off)))) picked.add(d); } drawCal(); } }, 'この月の平日を全部'), el('button', { type: 'button', class: 'link', onclick: () => { picked.clear(); drawCal(); } }, 'チェックを外す')));
+    btn.textContent = picked.size ? `${picked.size}日分をGoogleカレンダーに入れる` : '日付をチェックしてください';
+    const dd0 = [...picked].sort()[0] || S.today; dl.textContent = ''; areasFor(dd0).list.forEach(a => add(dl, el('option', { value: a.a })));
+  };
+  drawChips(); drawCal();
+  btn.onclick = async () => {
+    if (!picked.size) { toast('日付をチェックしてください'); return; }
+    const a = toMin(s1.value), b = toMin(e1.value);
+    if (a == null || b == null || b <= a) { toast('終わる時刻は、始める時刻より後にしてください'); return; }
+    store.set('bulkS', s1.value); store.set('bulkE', e1.value);
+    const t = KL[k] + (memo.value.trim() ? ' ' + memo.value.trim() : '');
+    const list = [...picked].sort(); close();
+    for (const d of list) await put(d, { add: { [uid()]: { k, s: s1.value, e: e1.value, t, at: Date.now() } }, q: true }, true);
+    toast(`${list.length}日分を登録しました。10分ほどでGoogleカレンダーに入ります`);
+  };
+  const close = modal('予定をまとめてカレンダーに入れる', [
+    el('div', { class: 'muted', text: '入れたい日をタップしてチェック。点は、もう入っている予定です。' }),
+    cal,
+    el('div', { class: 'field' }, 'やること', chips),
+    el('div', { class: 'pline' }, el('span', { class: 'tilde', style: 'grid-column:1/5;grid-row:1;justify-self:start', text: '時間' }), s1, el('span', { class: 'tilde', text: '〜' }), e1),
+    el('label', { class: 'field' }, 'メモ（予定の名前に入ります）', memo, dl),
+    btn,
+    el('div', { class: 'muted', text: 'Googleカレンダーには「訪販 横浜市青葉区」のような名前で入ります。消したいときはGoogleカレンダーで消してください。' }),
+    el('button', { class: 'btn wide', onclick: () => close() }, 'やめる')]);
+}
+// これから入れる予定（カレンダー待ち・入った・入らなかった）
+function addsBox(){
+  const days = myDays(); const rows = [];
+  Object.keys(days).filter(d => d >= S.today).sort().forEach(d => { for (const id in (days[d].add || {})) { const a = days[d].add[id]; if (a && (!a.st || (a.done && Date.now() - a.done < 86400000) || a.st === 'ng')) rows.push([d, a]); } });
+  const sec = el('section', { class: 'card' }, el('h3', null, '予定をまとめて入れる', el('small', { text: '訪販・配布など' })),
+    el('div', { class: 'muted', text: 'カレンダーで日付にチェックするだけで、Googleカレンダーにまとめて入ります。' }),
+    el('button', { class: 'btn primary wide', onclick: () => bulkForm() }, '日付を選んで入れる'));
+  if (rows.length) add(sec, el('div', { class: 'adds' }, rows.slice(0, 5).map(([d, a]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, `${md(d)} ${a.s}〜${a.e}`, el('small', { text: a.t })), el('span', { class: 'st ' + (!a.st ? 'warn' : a.st === 'ok' ? 'good' : 'bad'), text: !a.st ? '登録待ち' : a.st === 'ok' ? (a.how === 'inv' ? '招待で登録' : '登録済み') : '入らなかった' }))), rows.length > 5 ? el('div', { class: 'muted', text: `ほか ${rows.length - 5}件` }) : null));
+  return sec;
 }
 
 // ---------- 読み込み ----------
@@ -308,7 +446,9 @@ function watch(){
   S.unsub.push(FB.day.watch(S.tmr, d => { S.tdoc = d; rerender(); }));
   S.unsub.push(FB.act.watchDay(S.today, docs => { S.acts = docs || []; rerender(); }));
   S.unsub.push(FB.cfg.watch('goal', d => { S.goal = Object.assign({}, GOAL_DEF, d || {}); rerender(); }));
-  S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); }));
+  S.unsub.push(FB.cfg.watch('app', d => { S.appcfg = d || {}; pushAuto(); rerender(); }));
+  S.unsub.push(FB.cfg.watch('area', d => { S.area = d || {}; rerender(); }));
+  S.unsub.push(FB.cfg.watch('areas', d => { S.areas = d || {}; rerender(); }));
   if (FB.isAdmin()) S.unsub.push(FB.cfg.watch('calstat', d => { S.calstat = d || {}; if (S.tab === 'admin') rerender(); }));
   S.unsub.push(FB.ntc.watch(S.today, d => { S.ntc = d || {}; if (S.tab === 'team') rerender(); }));
   loadMine();
@@ -455,8 +595,8 @@ function planList(st){
     const past = p.cal && toMin(p.e) != null && toMin(p.e) <= nowM;
     add(sec, el('div', { class: 'pitem' + (run ? ' on' : mine.length || past ? ' done' : '') },
       el('span', { class: 'dot', style: `background:${KC[p.k]}` }),
-      el('div', { class: 'pt' }, el('b', { text: p.cal ? `${p.s}〜${p.e}　${p.m || KIND[p.k]}` : `${p.s}〜${p.e}　${KIND[p.k]}` }),
-        p.cal ? el('small', { class: 'muted', text: p.apo ? 'アポ・商談' : p.k === 'other' ? 'その他の予定' : KIND[p.k] }) :
+      el('div', { class: 'pt' + (p.cal && !p.wait ? ' tap' : ''), onclick: p.cal && !p.wait && !st.sub ? () => kindFix(S.today, p) : null, title: p.cal ? '種類がちがうときはタップして直せます' : null }, el('b', { text: p.cal ? `${p.s}〜${p.e}　${p.m || KIND[p.k]}` : `${p.s}〜${p.e}　${KIND[p.k]}` }),
+        p.cal ? el('small', { class: 'muted', text: (p.wait ? 'カレンダーに登録待ち・' : '') + (p.apo ? 'アポ・商談' : p.k === 'other' ? 'その他の予定' : KIND[p.k]) }) :
         (p.m || mine.length) ? el('small', { class: 'muted' }, run ? el('span', { class: 'pst', text: '実行中　' }) : mine.length ? el('span', { class: 'pst', text: `済 ${hm(used)}　` }) : null, p.m || '') : null),
       !run && !st.sub && !past && p.k !== 'other' ? el('button', { class: 'btn', onclick: () => startWork(p.k, p.cal ? null : p.id) }, mine.length ? '再開' : '開始') : null));
   }
@@ -475,6 +615,7 @@ function hanBox(st){
 }
 function postBox(st){
   const list = Object.entries((S.doc && S.doc.post) || {}).sort((a, b) => a[1].t - b[1].t);
+  if (S.doc && S.doc.pnone && !list.length) return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: '配っていない' })), el('div', { class: 'muted', text: '理由：' + S.doc.pnone }), st.sub ? null : el('button', { class: 'btn', onclick: () => put(S.today, { pnone: null }) }, '取り消す'));
   return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: `今日 ${nf(st.post)}枚` })),
     list.map(([id, p]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, p.a || 'エリア未記入'), el('span', { class: 'tag', text: p.ty || '' }), el('b', { text: `${nf(p.n)}枚` }),
       st.sub ? null : el('button', { class: 'del', 'aria-label': 'この報告を消す', onclick: () => { if (confirm('この配布報告を消しますか？')) drop(S.today, 'post', id); } }, '×'))),
@@ -498,6 +639,8 @@ function reportBox(st){
     el('button', { class: 'btn primary wide', onclick: () => {
       const run = statOf(S.doc, true).running;
       if (run && (run.k === 'call' || run.k === 'post')) { toast(`先に「${KIND[run.k]}」の結果を入れてください`); stopWork(); return; }
+      const pd = postDue(S.doc, S.today);
+      if (pd.length) { toast('先に配布の報告（エリアと枚数）を入れてください'); postForm(null, S.today, pd[0]); return; }
       if (!refl.value.trim()) { toast('振り返りをひとこと書いてください'); refl.focus(); return; }
       const first = !st.sub; const now = Date.now();
       const patch = { refl: refl.value.trim(), tmr: tmr.value.trim(), sub: st.sub || now };
@@ -528,7 +671,7 @@ function yesterdayBox(){
     const ta = el('textarea', { rows: 2, placeholder: '昨日の振り返りをひとこと' });
     out.push(el('section', { class: 'card bad' }, el('h3', { text: '昨日の日報がまだです' }),
       el('div', { class: 'muted', text: '出すまでお知らせが届きます。ひとことで大丈夫です。' }), ta,
-      el('button', { class: 'btn primary', onclick: () => { if (!ta.value.trim()) { ta.focus(); return; } put(S.yday, { refl: ta.value.trim(), sub: Date.now(), late: 1 }); toast('昨日の日報を出しました'); } }, '昨日の日報を出す')));
+      el('button', { class: 'btn primary', onclick: () => { if (!ta.value.trim()) { ta.focus(); return; } if (postDue(y, S.yday).length) { toast('先に昨日の配布の報告を入れてください'); postForm(null, S.yday, postDue(y, S.yday)[0]); return; } put(S.yday, { refl: ta.value.trim(), sub: Date.now(), late: 1 }); toast('昨日の日報を出しました'); } }, '昨日の日報を出す')));
   }
   return out;
 }
@@ -600,7 +743,7 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), pushNotice(), yesterdayBox(), heroBox(st));
+  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st));
   const editing = S.editing;
   if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st), metrics(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
@@ -619,6 +762,7 @@ function renderToday(main){
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
   if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
   if (st.plan.length || st.work || st.v.doors || st.han.all || st.post) add(main, reportBox(st));
+  add(main, addsBox());
 }
 
 // ===== 成績 =====
@@ -815,7 +959,7 @@ function renderAdmin(main){
       el('details', { class: 'pcal' }, el('summary', { text: `${r.label}の予定の分析` }), calCard(perCal[x.u] || calStats(x.days, r.from, end, x.u), r.label)),
       today ? el('div', { class: 'pf' }, (() => { const c = (S.calstat || {})[FB.ukey(x.u)]; return el('span', { class: 'st ' + (c && c.ok ? 'good' : 'bad'), text: c && c.ok ? 'カレンダー：共有済み' : 'カレンダー：未共有' }); })(), el('span', { class: 'st ' + pt[1], text: `お知らせ：${pt[0]}` }), nag ? el('span', { class: 'st ' + (nag >= 3 ? 'bad' : 'warn'), text: `今日の催促 ${nag}回` }) : null) : null));
   });
-  add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), adminGame(), rosterBox());
+  add(main, el('h2', { class: 'sh', text: '設定' }), notifySwitch(), areaBox(), kwBox(), adminGame(), rosterBox());
 }
 // ===== 月の予定（Googleカレンダー）の分析 =====
 const CK = { door: '訪販', call: '反響', post: '配布', apo: 'アポ', other: 'その他' };
@@ -823,7 +967,7 @@ const CKC = { door: 'var(--k-door)', call: 'var(--k-call)', post: 'var(--k-post)
 function calStats(days, from, end, u){
   const o = { kind: { door: 0, call: 0, post: 0, apo: 0, other: 0 }, total: 0, past: 0, future: 0, apo: 0, planDays: 0, offDays: 0, emptyDays: 0, roughDays: 0, heat: Array.from({ length: 7 }, () => Array(24).fill(0)), actual: 0, pastPlanDays: 0 };
   for (let d = from; d <= end; d = addDays(d, 1)) {
-    const doc = days[d]; const ev = (doc && doc.cal && doc.cal.ev) || [];
+    const doc = days[d]; const ev = calEv(doc).filter(e => !e.wait);
     const off = doc && (doc.off || (doc.cal && doc.cal.off));
     const wd = (toDate(d).getDay() + 6) % 7; // 月=0
     if (off) { o.offDays++; continue; }
@@ -956,11 +1100,46 @@ function rosterBox(){
   }
   return sec;
 }
+// 配布エリアの台帳：期間ごとに、ソニーのエリアのリスト（スプレッドシート）を登録
+function areaBox(){
+  const per = ((S.area && S.area.per) || []).slice().sort((a, b) => b.from < a.from ? -1 : 1);
+  const ym = (s) => s ? `${+s.slice(0, 4)}年${+s.slice(4)}月` : '';
+  const t = toDate(S.today); const def = ymd(new Date(t.getFullYear(), t.getMonth(), 1)).slice(0, 6), def2 = ymd(new Date(t.getFullYear(), t.getMonth() + 1, 1)).slice(0, 6);
+  const fm = el('input', { type: 'month', value: `${def.slice(0, 4)}-${def.slice(4)}`, 'aria-label': '期間の始まりの月' });
+  const tm = el('input', { type: 'month', value: `${def2.slice(0, 4)}-${def2.slice(4)}`, 'aria-label': '期間の終わりの月' });
+  const url = el('input', { type: 'url', style: 'width:100%', placeholder: 'https://docs.google.com/spreadsheets/d/…', 'aria-label': 'スプレッドシートのURL' });
+  const savePer = async list => { try { await FB.cfg.set('area', Object.assign({}, S.area || {}, { per: list })); } catch (e) { toast('保存できませんでした'); throw e; } };
+  return keepOpen('area', el('details', { class: 'card' }, el('summary', { text: '配布エリアの台帳（代表）' }),
+    el('div', { class: 'muted', text: '期間ごとに、ソニーから来るエリアのリスト（スプレッドシート）のURLを入れてください。「住所」の列から市区町村（政令市は区まで）を自動で数え、配布の報告でエリアを選べるようにします。読み込みは10分ほどかかります。' }),
+    per.length ? per.map(p => { const r = (S.areas || {})[p.id]; return el('div', { class: 'rec' }, el('div', { class: 'rt' }, `${p.label}`, el('small', { text: r ? (r.err ? '読めませんでした：' + r.err : `${r.name || ''}・${(r.areas || []).length}エリア・${nf(r.rows)}棟`) : '読み込み待ち' })),
+      el('a', { class: 'link', href: p.url, target: '_blank', rel: 'noopener' }, '開く'),
+      el('button', { class: 'link', onclick: async () => { await savePer(per.map(x => x.id === p.id ? Object.assign({}, x, { req: Date.now() }) : x)); toast('読み直しを頼みました（10分ほど）'); } }, '読み直す'),
+      el('button', { class: 'del', 'aria-label': 'この期間を消す', onclick: async () => { if (confirm(`${p.label}を消しますか？`)) await savePer(per.filter(x => x.id !== p.id)); } }, '×')); }) : el('div', { class: 'muted', text: 'まだ登録はありません。' }),
+    el('div', { class: 'row' }, fm, el('span', { text: '〜' }), tm), url,
+    el('button', { class: 'btn primary', onclick: async () => {
+      const f = fm.value.replace('-', ''), to = tm.value.replace('-', ''), u = url.value.trim();
+      if (f.length !== 6 || to.length !== 6 || to < f) { toast('期間の月を正しく選んでください'); return; }
+      if (!/docs\.google\.com\/spreadsheets\//.test(u)) { toast('GoogleスプレッドシートのURLを入れてください'); return; }
+      const label = f.slice(0, 4) === to.slice(0, 4) ? `${f.slice(0, 4)}年${+f.slice(4)}${f === to ? '' : '・' + +to.slice(4)}月` : `${ym(f)}〜${ym(to)}`;
+      await savePer(per.concat([{ id: 'p' + uid(), label, from: f, to, url: u }])); url.value = ''; toast(`${label}の台帳を登録しました`);
+    } }, 'この期間の台帳を登録')));
+}
+// 予定の名前の言葉 → 種類（訪販・反響・配布・アポ）。誤判定を直す
+function kwBox(){
+  const kw = Object.assign({}, KW_DEF, (S.appcfg && S.appcfg.kw) || {});
+  const f = {}; const L = [['door', '訪販'], ['call', '反響対応'], ['post', '配布（この言葉があれば配布の報告が必須）'], ['apo', 'アポ・商談'], ['ng', '配布と見なさない言葉（例：ポスト投函確認、ポストカード）']];
+  return keepOpen('kw', el('details', { class: 'card' }, el('summary', { text: '予定の名前の言葉と種類（代表）' }),
+    el('div', { class: 'muted', text: 'Googleカレンダーの予定の名前にこの言葉が入っていたら、その種類として数えます。上から順に見ます。「、」区切り。本人も予定をタップして種類を直せます。' }),
+    L.map(([k, l]) => el('label', { class: 'field' }, l, f[k] = el('input', { type: 'text', value: kwList(kw[k]).join('、') }))),
+    el('div', { class: 'row' },
+      el('button', { class: 'btn primary', onclick: async () => { const o = {}; for (const k in f) o[k] = kwList(f[k].value).join(','); try { await FB.cfg.set('app', Object.assign({}, S.appcfg || {}, { kw: o })); toast('言葉を保存しました'); } catch (e) { toast('保存できませんでした'); } } }, '保存する'),
+      el('button', { class: 'btn', onclick: async () => { if (!confirm('最初の言葉に戻しますか？')) return; const c = Object.assign({}, S.appcfg || {}); delete c.kw; try { await FB.cfg.set('app', c); toast('戻しました'); } catch (e) { toast('戻せませんでした'); } } }, '最初に戻す'))));
+}
 function appBox(){
   const v = el('input', { type: 'text', value: (S.appcfg && S.appcfg.vapid) || '', placeholder: 'B で始まる長い文字列' });
   return el('section', { class: 'card' }, el('h3', { text: 'スマホのお知らせの鍵（代表・最初に1回）' }),
     el('div', { class: 'muted', text: 'Firebaseの画面 →（歯車）プロジェクトの設定 →「Cloud Messaging」→ いちばん下の「ウェブプッシュ証明書」で「鍵ペアを生成」→ 出てきた鍵をここに貼って保存。' }),
-    v, el('button', { class: 'btn primary', onclick: async () => { try { await FB.cfg.set('app', { vapid: v.value.trim() }); toast('保存しました。みんなの端末で順にお知らせが使えるようになります'); } catch (e) { toast('保存できませんでした'); } } }, '保存'));
+    v, el('button', { class: 'btn primary', onclick: async () => { try { await FB.cfg.set('app', Object.assign({}, S.appcfg || {}, { vapid: v.value.trim() })); toast('保存しました。みんなの端末で順にお知らせが使えるようになります'); } catch (e) { toast('保存できませんでした'); } } }, '保存'));
 }
 
 // ---------- スマホのお知らせ ----------
