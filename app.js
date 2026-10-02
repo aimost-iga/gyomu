@@ -317,7 +317,7 @@ function postForm(run, day, ev){
   const dl = el('datalist', { id: 'gyAreas' }, [...new Set(areaNames().concat(ar.list.map(a => a.a)))].map(a => el('option', { value: a })));
   const flt = el('input', { type: 'search', placeholder: '絞り込み（例：青葉）', 'aria-label': 'エリアを絞り込む' });
   const grid = el('div', { class: 'achips' });
-  const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q)).slice(0, 60).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.mine ? 'あなたの担当・' : a.on ? '配布済み・' : ''}${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
+  const drawAreas = () => { grid.textContent = ''; const q = flt.value.trim(); ar.list.filter(a => !q || a.a.includes(q) || (a.grp || '').includes(q)).forEach(a => add(grid, el('button', { type: 'button', 'aria-pressed': String(pick === a.a), onclick: () => { pick = pick === a.a ? '' : a.a; area.value = ''; drawAreas(); } }, el('b', { text: a.a }), el('small', { text: `${a.mine ? 'あなたの担当・' : a.on ? '配布済み・' : ''}${a.b}棟・${nf(a.h)}戸${done.has(a.a) ? '・報告済み' : ''}` })))); };
   flt.addEventListener('input', drawAreas); area.addEventListener('input', () => { if (area.value.trim()) { pick = ''; drawAreas(); } });
   drawAreas();
   const num = el('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: '例：400' });
@@ -336,7 +336,7 @@ function postForm(run, day, ev){
   };
   const close = modal(run ? '配布の結果を入れて終了' : `配布の報告${day !== S.today ? '（' + md(day) + '）' : ''}`, [
     ev ? el('div', { class: 'muted', text: `予定：${ev.s}〜${ev.e}「${ev.t}」` }) : null,
-    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}・ポスティング反響台帳より）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアが、ポスティング反響台帳にまだありません。下に入れてください。' })),
+    el('div', { class: 'field' }, ar.per.length ? `配ったエリア（${ar.per.map(p => p.label).join('・')}の台帳の全${ar.list.length}エリア）` : '配ったエリア', ar.list.length ? [flt, grid] : el('div', { class: 'muted', text: 'この期間の配布エリアが、ポスティング反響台帳にまだありません。下に入れてください。' })),
     el('label', { class: 'field' }, ar.list.length ? 'リストにないエリア' : 'エリア（市区町村・町名）', area, dl),
     el('div', { class: 'field' }, '建物の種類', chips),
     el('label', { class: 'field' }, '配った枚数', num),

@@ -364,7 +364,6 @@ function readAreas_(now) {
     const r = v[i]; const id = String(r[0]).trim(); if (!id || !r[5]) continue;
     const end = d_(r[3]); if (end && end < lim) continue;
     const o = by[id] = by[id] || { id, name: String(r[1]), start: d_(r[2]), end, areas: [] };
-    if (o.areas.length >= 250) continue;
     o.areas.push({ a: String(r[5]).trim(), pref: String(r[6] || ''), on: String(r[4]).trim() === '○', grp: String(r[7] || ''), who: String(r[8] || ''), times: Number(r[9]) || 1, b: Number(r[10]) || 0, h: Number(r[11]) || 0 });
   }
   const rounds = Object.keys(by).map(k => by[k]).sort((x, y) => x.start < y.start ? 1 : -1);
