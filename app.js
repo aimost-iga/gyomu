@@ -917,7 +917,6 @@ function pointCard(){
   const a = ad[wk % ad.length];
   return el('section', { class: 'pointc' },
     el('div', { class: 'cc-h' }, el('b', { text: 'あなたのポイント' })),
-    el('p', { class: 'pt-role', text: ROLE_LINE }),
     el('div', { class: 'pt-q' }, el('small', { text: '今日の問い' }), el('p', { text: q })),
     el('div', { class: 'pt-a' }, el('small', { text: '今週の考え方' }), el('b', { text: a[0] }), el('p', { text: a[1] })),
     el('details', { class: 'coach' }, el('summary', null, el('span', { text: '今週のやりとりの確認' }), el('small', { text: '3つ' })),
