@@ -16,6 +16,8 @@ const WEEK = '日月火水木金土';
 const START = '20261003';
 const MAP_URL = 'https://aimost-iga.github.io/houmon-map/';
 const KEIHI_FORM = 'https://forms.gle/WAtRmB79m35BkEXT9';
+const FORM_KAKU = 'https://forms.gle/K5acTr1Ux2opE4WS8';   // NURO光（後確・申込連携）
+const FORM_WEB = 'https://forms.gle/AJkjg6Lp4fe9Q7zm9';    // WEBエントリー連携（WEB申込・獲得顧客）
 const KEIHI_SHEET = 'https://docs.google.com/spreadsheets/d/17kNPksAgkHaUjbqkWl9pVdyIbN9FKmGl2Ocnb7wM-VM/edit?gid=969630987#gid=969630987';
 const KH_CAT = { train: '電車・バス', cycle: 'レンタサイクル', gas: 'ガソリン', park: '駐車場・高速', tel: '通信費', other: 'その他' };
 const yen = n => '¥' + Math.round(+n || 0).toLocaleString();
@@ -377,8 +379,8 @@ function postDueBox(){
   const days = myDays(); const out = [];
   Object.keys(days).filter(d => d <= S.today && (d >= START || d === S.today) && d >= addDays(S.today, -31)).sort().forEach(d => { const l = postDue(days[d], d); if (l.length) out.push([d, l]); });
   if (!out.length) return null;
-  return el('section', { class: 'card bad' }, el('h3', null, '配布の報告がまだです', el('small', { text: '入れるまでお知らせが届きます' })),
-    el('div', { class: 'muted', text: 'カレンダーに配布・ポスティングの予定がありました。どのエリアに何枚配ったかを入れてください。' }),
+  return el('section', { class: 'card bad' }, el('h3', { text: '配布の報告がまだです' }),
+    el('div', { class: 'muted', text: '配布・ポスティングの予定がありました。どのエリアに何枚配ったかを入れてください（入れるまでお知らせが届きます）。' }),
     out.map(([d, l]) => el('div', { class: 'due' },
       el('div', { class: 'due-h' }, el('b', { text: d === S.today ? '今日' : md(d) }), el('span', { text: l.map(e => `${e.s}〜${e.e} ${e.t}`).join('／') })),
       el('div', { class: 'row' }, el('button', { class: 'btn primary', onclick: () => postForm(null, d, l[0]) }, 'エリアと枚数を入れる'), el('button', { class: 'link', onclick: () => notPostForm(d, l) }, '配布ではない・配っていない')))));
@@ -550,7 +552,7 @@ function heroBox(st){
   add(box, el('div', { class: 'hk', text: st.work ? `今日の稼働 ${hm(st.work)}` : '今日もよろしくお願いします' }),
     el('div', { class: 'hsub', text: next ? `次の予定：${next.s}〜${next.e} ${next.cal ? next.m : KIND[next.k] + (next.m ? '（' + next.m + '）' : '')}` : '予定はすべて終わりました。日報を出しましょう。' }),
     next && next.k !== 'other' ? el('button', { class: 'btn primary big', onclick: () => startWork(next.k, next.cal ? null : next.id) }, `${KIND[next.k]}を開始する`) : null,
-    el('div', { class: 'hnote', text: '開始・終了は押さなくても大丈夫です。訪販の時間は訪問マップの登録から自動で出ます。' }));
+    null);
   return box;
 }
 function nextPlan(st){
@@ -616,6 +618,7 @@ function planList(st){
 function hanBox(st){
   const list = Object.entries((S.doc && S.doc.han) || {}).sort((a, b) => a[1].t - b[1].t);
   const h = st.han;
+  if (!list.length && !st.sub) return el('section', { class: 'card slim' }, el('div', { class: 'slim-r' }, el('b', { text: '反響対応' }), el('small', { text: 'まだありません' }), el('button', { class: 'btn', onclick: () => hanForm(null) }, '＋ 反響対応を足す')));
   return el('section', { class: 'card' }, el('h3', null, '反響対応', el('small', { text: `対応${h.all}件` })),
     h.all || h.inv ? el('div', { class: 'kpis k3' }, [['電話', h.call], ['メッセージ', h.msg], ['つながった', h.conn], ['アポ・提案', h.apo], ['無効', h.inv], ['獲得', h.got]].map(([t, v]) => el('div', { class: 'kpi' }, el('b', { text: v }), el('span', { text: t })))) : null,
     list.map(([id, r]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, `${timeOf(r.t)}　電話${r.call || 0}・メッセ${r.msg || 0}・つながり${r.conn || 0}・アポ${r.apo || 0}・無効${r.inv || 0}・獲得${r.got || 0}`, r.m ? el('small', { text: r.m }) : null),
@@ -625,14 +628,17 @@ function hanBox(st){
 function postBox(st){
   const list = Object.entries((S.doc && S.doc.post) || {}).sort((a, b) => a[1].t - b[1].t);
   if (S.doc && S.doc.pnone && !list.length) return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: '配っていない' })), el('div', { class: 'muted', text: '理由：' + S.doc.pnone }), st.sub ? null : el('button', { class: 'btn', onclick: () => put(S.today, { pnone: null }) }, '取り消す'));
+  if (!list.length && !st.sub) return el('section', { class: 'card slim' }, el('div', { class: 'slim-r' }, el('b', { text: '配布報告' }), el('small', { text: 'まだありません' }), el('button', { class: 'btn', onclick: () => postForm(null) }, '＋ 配布を足す')));
   return el('section', { class: 'card' }, el('h3', null, '配布報告', el('small', { text: `今日 ${nf(st.post)}枚` })),
     list.map(([id, p]) => el('div', { class: 'rec' }, el('div', { class: 'rt' }, p.a || 'エリア未記入'), el('span', { class: 'tag', text: p.ty || '' }), el('b', { text: `${nf(p.n)}枚` }),
       st.sub ? null : el('button', { class: 'del', 'aria-label': 'この報告を消す', onclick: () => { if (confirm('この配布報告を消しますか？')) drop(S.today, 'post', id); } }, '×'))),
     st.sub ? null : el('button', { class: 'btn', onclick: () => postForm(null) }, '＋ 配布を足す'));
 }
 function reportBox(st){
-  const sec = el('section', { class: 'card' + (st.sub ? ' ok' : '') }, el('h3', null, '日報', st.sub ? el('span', { class: 'stamp', text: '提出済み' }) : el('small', { text: '出すまでお知らせが届きます' })));
-  add(sec, el('div', { class: 'kpis k4' }, [['稼働', h1(st.work) + 'h'], ['訪問', st.v.doors], ['対面', st.v.face], ['獲得', st.got], ['反響対応', st.han.all], ['アポ', st.han.apo], ['配布', nf(st.post)], ['訪問/時', st.h.door > 600000 ? (st.v.doors / (st.h.door / 3600000)).toFixed(1) : '—']].map(([t, v]) => el('div', { class: 'kpi' }, el('b', { text: v }), el('span', { text: t })))));
+  // 夕方まではたたんでおく（押すと開く）。夕方以降・直すときは開いておく
+  const sec = el('details', { class: 'card fold' + (st.sub ? ' ok' : '') }, el('summary', null, el('span', { class: 'fs-t' }, '日報'), st.sub ? el('span', { class: 'stamp', text: '提出済み' }) : el('small', { text: '出すまでお知らせが届きます' })));
+  if (S.editRep || (S.open.rep != null ? S.open.rep : !st.sub && new Date().getHours() >= 17)) sec.open = true;
+  sec.addEventListener('toggle', () => { S.open.rep = sec.open; });
   if (st.work) add(sec, el('div', { class: 'muted', text: KIND_ORDER.filter(k => st.h[k]).map(k => `${KIND[k]} ${hm(st.h[k])}`).join('・') + (st.h.door > 600000 ? `・訪販1時間あたり ${(st.v.doors / (st.h.door / 3600000)).toFixed(1)}部屋` : '') }));
   if (st.sub && !S.editRep) {
     if (S.doc.refl) add(sec, el('div', { class: 'ins' }, el('small', { class: 'muted', text: '振り返り　' }), S.doc.refl));
@@ -714,7 +720,14 @@ function dayline(st){
   return el('section', { class: 'dayline', 'aria-label': '今日の予定と実際の時間' },
     el('div', { class: 'dl-head' }, el('div', null, el('small', { text: '稼働' }), el('b', { text: hm(st.work) })), el('div', null, el('small', { text: '予定' }), el('b', { text: planned ? hm(planned) : '—' })),
       el('div', null, el('small', { text: '予定に対して' }), el('b', { text: planned ? Math.round(st.work / planned * 100) + '%' : '—' }))),
-    track, ticks, legend);
+    track, ticks, legend, mrow(st));
+}
+// 今日の数字を1行で（訪問・対面・獲得・反響・配布）
+function mrow(st){
+  const ts = st.off ? [] : targetsOf(st); const tg = l => ts.find(t => t.label === l);
+  const cell = (label, val, t) => el('div', { class: 'mr' + (t && t.val >= t.tgt ? ' hit' : '') }, el('b', { text: val }), el('small', { text: label }),
+    t ? el('div', { class: 'mt-bar' }, el('i', { style: `width:${Math.min(100, Math.round(t.val / t.tgt * 100))}%` })) : el('div', { class: 'mt-bar off' }), el('span', { text: t ? `/${nf(t.tgt)}` : '' }));
+  return el('div', { class: 'mrow', 'aria-label': '今日の数字' }, cell('訪問', nf(st.v.doors), tg('訪問')), cell('対面', nf(st.v.face), tg('対面')), cell('獲得', nf(st.got), tg('獲得')), cell('反響', nf(st.han.all), tg('反響の対応')), cell('配布', nf(st.post), tg('配布枚数')));
 }
 // あいさつと日付
 function greet(st){
@@ -752,9 +765,9 @@ function feedBox(){
 }
 function renderToday(main){
   const st = statOf(S.doc, true);
-  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st));
+  add(main, greet(st), pushNotice(), postDueBox(), yesterdayBox(), heroBox(st), launcher());
   const editing = S.editing;
-  if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st), metrics(st));
+  if (!st.off && (st.plan.length || st.work || st.v.doors)) add(main, dayline(st));
   if (st.off && !editing) add(main, el('section', { class: 'card' }, el('h3', { text: '今日は休み' }), el('div', { class: 'muted', text: S.doc && S.doc.cal && S.doc.cal.off ? 'Googleカレンダーに「休み」が入っています。お知らせは止まっています。' : 'お知らせは止まっています。' }), S.doc && S.doc.off ? el('button', { class: 'btn', onclick: () => put(S.today, { off: false }, true) }, '休みを取り消す') : null));
   else if (editing && !st.sub) add(main, planEditor());
   else if (st.plan.length) add(main, planList(st));
@@ -769,9 +782,39 @@ function renderToday(main){
   const blocks = [[used('call') || st.han.all || st.han.inv, hanBox(st)], [used('post') || st.post, postBox(st)]];
   blocks.filter(b => b[0]).forEach(b => add(main, b[1]));
   const rest = blocks.filter(b => !b[0]).map(b => b[1]);
-  if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card' }, el('summary', { text: '予定にない記録（反響対応・配布）' }), rest)));
+  if (rest.length && !st.sub) add(main, keepOpen('more', el('details', { class: 'card fold' }, el('summary', null, el('span', { class: 'fs-t', text: '予定にない記録' }), el('small', { text: '反響対応・配布' })), rest)));
   if (st.plan.length || st.work || st.v.doors || st.han.all || st.post) add(main, reportBox(st));
-  add(main, addsBox(), keihiBox());
+}
+// すぐ使う：よく使うフォームや機能へ1タップで
+const IC = {
+  form: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h4"/>',
+  web: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/>',
+  yen: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="m9 15 2 2 4-4"/>',
+  map: '<path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>'
+};
+const svgI = k => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('width', '22'); s.setAttribute('height', '22'); s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '1.8'); s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round'); s.innerHTML = IC[k]; return s; };
+function launcher(){
+  const tile = (k, label, href, onclick) => href ? el('a', { class: 'ln', href, target: '_blank', rel: 'noopener' }, el('span', { class: 'ln-i' }, svgI(k)), el('span', { class: 'ln-t', text: label }))
+    : el('button', { class: 'ln', onclick }, el('span', { class: 'ln-i' }, svgI(k)), el('span', { class: 'ln-t', text: label }));
+  const ym = S.today.slice(0, 4) + '-' + S.today.slice(4, 6); const m = (S.kh && S.kh.m && S.kh.m[ym]) || null;
+  let wait = 0; const days = myDays(); Object.keys(days).filter(d => d >= S.today).forEach(d => { for (const id in (days[d].add || {})) if (days[d].add[id] && !days[d].add[id].st) wait++; });
+  const ng = Object.keys(days).filter(d => d >= S.today).some(d => Object.values(days[d].add || {}).some(a => a && a.st === 'ng'));
+  return el('section', { class: 'launch', 'aria-label': 'すぐ使う' },
+    el('div', { class: 'ln-g' },
+      tile('form', '後確申込', FORM_KAKU), tile('web', 'WEB申込', FORM_WEB), tile('yen', '経費', KEIHI_FORM),
+      tile('cal', '予定登録', null, () => bulkForm()), tile('map', 'マップ', MAP_URL)),
+    el('div', { class: 'ln-s' },
+      el('button', { class: 'ln-chip', onclick: () => keihiModal() }, `${+S.today.slice(4, 6)}月の経費 `, el('b', { text: m ? yen(m.t) : '¥0' }), m && m.tate ? el('span', { text: `立替 ${yen(m.tate)}` }) : null, el('i', { text: '›' })),
+      wait || ng ? el('button', { class: 'ln-chip' + (ng ? ' bad' : ''), onclick: () => addsModal() }, ng ? 'カレンダーに入らなかった予定' : 'カレンダー登録待ち ', wait ? el('b', { text: wait + '件' }) : null, el('i', { text: '›' })) : null));
+}
+function keihiModal(){
+  const box = keihiBox(); box.classList.add('plain'); const h = box.querySelector('h3'); if (h) h.remove();
+  modal('今月の経費', [box, el('button', { class: 'btn wide', onclick: e => e.target.closest('.modal').remove() }, '閉じる')]);
+}
+function addsModal(){
+  const box = addsBox(); box.classList.add('plain'); const h = box.querySelector('h3'); if (h) h.remove();
+  modal('予定をまとめて入れる', [box, el('button', { class: 'btn wide', onclick: e => e.target.closest('.modal').remove() }, '閉じる')]);
 }
 // 経費：申請フォームへすぐ飛べる＋今月の自分の経費
 function keihiBox(){
