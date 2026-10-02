@@ -44,6 +44,9 @@ function tick() {
 function testPush() { const u = { email: OWNER_MAIL, name: '代表' }; log_('試しのお知らせ：' + send_(u, '試しのお知らせ', 'これが見えていればスマホのお知らせは届いています。', 'test')); }
 
 function tick_(now) {
+  // 代表がアプリの「設定」で「動かす」にするまでは、お知らせもカレンダー反映もしない
+  const appCfg = getDoc_('cfg/app') || {};
+  if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
   const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
   const P = PropertiesService.getScriptProperties();

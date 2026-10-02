@@ -792,7 +792,17 @@ function renderSet(main){
   add(main, el('section', { class: 'card' }, el('h3', { text: 'この端末' }), el('label', { class: 'row', for: 'snd' }, snd, '達成したときに音を鳴らす'),
     el('div', { class: 'row' }, el('a', { class: 'btn', href: 'guide.html' }, '使い方'), el('button', { class: 'btn', onclick: () => FB.signOut() }, 'ログアウト')),
     el('div', { class: 'muted', text: `ログイン中：${ME.email}` })));
-  if (FB.isAdmin()) add(main, rosterBox());
+  if (FB.isAdmin()) add(main, notifySwitch(), rosterBox());
+}
+// 自動のお知らせ・カレンダー反映を、代表が止めたり動かしたりする
+function notifySwitch(){
+  const on = !!(S.appcfg && S.appcfg.notify === true);
+  return el('section', { class: 'card' + (on ? ' ok' : ' warn') }, el('h3', null, '自動のお知らせ（代表）', el('span', { class: 'st ' + (on ? 'good' : 'warn'), text: on ? '動いています' : '止めています' })),
+    el('div', { class: 'muted', text: on ? '予定・開始・終了・日報の催促、Googleカレンダーへの反映、毎朝のまとめが動いています。' : '催促・カレンダー反映・毎朝のまとめは、すべて止まっています。始める準備ができたら「動かす」を押してください（10分以内に動き始めます）。' }),
+    el('button', { class: 'btn ' + (on ? '' : 'primary'), onclick: async () => {
+      if (!confirm(on ? '自動のお知らせを止めますか？' : '自動のお知らせを動かしますか？（全員に催促が届き始めます）')) return;
+      try { await FB.cfg.set('app', Object.assign({}, S.appcfg || {}, { notify: !on })); toast(on ? '止めました' : '動かしました'); } catch (e) { toast('切り替えられませんでした'); }
+    } }, on ? '止める' : '動かす'));
 }
 // 名簿：人の名前をそろえる。別名（ほかの表・リストでの書き方）も登録して、自動で本人に寄せる
 function rosterBox(){
