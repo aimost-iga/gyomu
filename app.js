@@ -131,7 +131,7 @@ function lastMove(doc, st){
   for (const f of ['han', 'post']) for (const id in ((doc || {})[f] || {})) t = Math.max(t, +doc[f][id].t || 0);
   return t;
 }
-function visits(list){ const v = { doors: 0, face: 0, got: 0 }; for (const x of list) { v.doors++; v[x.r] = (v[x.r] || 0) + 1; if (FACE.includes(x.r)) v.face++; if (x.r === 'got') v.got++; if (x.t) { const hh = pad(new Date(+x.t).getHours()); v['h' + hh + 'd'] = (v['h' + hh + 'd'] || 0) + 1; if (FACE.includes(x.r)) v['h' + hh + 'f'] = (v['h' + hh + 'f'] || 0) + 1; } } return v; }
+function visits(list){ const v = { doors: 0, face: 0, got: 0 }; for (const x of list) { v[x.r] = (v[x.r] || 0) + 1; if (x.r === 'png') continue; v.doors++; if (FACE.includes(x.r)) v.face++; if (x.r === 'got') v.got++; if (x.t) { const hh = pad(new Date(+x.t).getHours()); v['h' + hh + 'd'] = (v['h' + hh + 'd'] || 0) + 1; if (FACE.includes(x.r)) v['h' + hh + 'f'] = (v['h' + hh + 'f'] || 0) + 1; } } return v; }
 function statOf(doc, live, u){
   doc = doc || {};
   const now = Date.now();
@@ -925,7 +925,7 @@ function pointBody(){
       el('ul', { class: 'pt-ck' }, ck.map(t => el('li', { text: t })))));
 }
 // ===== 訪販の分析（今月）：訪問マップの記録から =====
-const RES_J = [['away', '不在'], ['ihng', 'インターホンNG'], ['fng', '対面NG'], ['again', '再訪'], ['got', '獲得'], ['vac', '未入居'], ['sng', '差し込みNG'], ['png', 'ポスト投函NG']];
+const RES_J = [['away', '不在'], ['ihng', 'インターホンNG'], ['fng', '対面NG'], ['again', '再訪'], ['got', '獲得'], ['vac', '未入居'], ['png', 'ポスト投函NG']];
 function doorSum(days, u, from, to){
   const t = { doors: 0, face: 0, got: 0, ms: 0, days: 0, res: {}, hd: {}, hf: {} };
   for (let d = from; d <= to; d = addDays(d, 1)) {
