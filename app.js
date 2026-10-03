@@ -925,7 +925,7 @@ function pointBody(){
       el('ul', { class: 'pt-ck' }, ck.map(t => el('li', { text: t })))));
 }
 // ===== 訪販の分析（今月）：訪問マップの記録から =====
-const RES_J = [['away', '不在'], ['ihng', 'インターホンNG'], ['fng', '対面NG'], ['again', '再訪'], ['got', '獲得'], ['vac', '未入居']];
+const RES_J = [['away', '不在'], ['ihng', 'インターホンNG'], ['fng', '対面NG'], ['again', '再訪'], ['got', '獲得'], ['vac', '未入居'], ['sng', '差し込みNG'], ['png', 'ポスト投函NG']];
 function doorSum(days, u, from, to){
   const t = { doors: 0, face: 0, got: 0, ms: 0, days: 0, res: {}, hd: {}, hf: {} };
   for (let d = from; d <= to; d = addDays(d, 1)) {
@@ -954,7 +954,7 @@ function doorBody(days, u, from, to){
     el('div', { class: 'dk-s', text: `訪販した日 ${t.days}日・訪販の時間 ${h1(t.ms)}時間・1日平均 ${Math.round(t.doors / t.days)}部屋${p.doors ? '　（増減は先月の同じ時期と比べて）' : ''}` }));
   // 結果の内訳
   const tot = RES_J.reduce((a, [k]) => a + (t.res[k] || 0), 0) || t.doors;
-  const RC = { away: 'var(--k-other)', ihng: '#8E5CD9', fng: 'var(--bad)', again: 'var(--k-call)', got: 'var(--good)', vac: 'var(--line)' };
+  const RC = { away: 'var(--k-other)', ihng: '#8E5CD9', fng: 'var(--bad)', again: 'var(--k-call)', got: 'var(--good)', vac: 'var(--line)', sng: '#a0522d', png: '#5d6b7a' };
   add(box, el('div', { class: 'kb' }, RES_J.filter(([k]) => t.res[k]).map(([k, l]) => el('i', { style: `width:${(t.res[k] / tot * 100).toFixed(1)}%;background:${RC[k]}`, title: `${l} ${t.res[k]}` }))),
     el('div', { class: 'kl' }, RES_J.filter(([k]) => t.res[k]).map(([k, l]) => el('span', null, el('i', { style: `background:${RC[k]}` }), `${l} ${Math.round(t.res[k] / tot * 100)}%`))));
   // 時間帯ごとの対面率
