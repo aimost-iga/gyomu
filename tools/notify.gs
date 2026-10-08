@@ -53,6 +53,7 @@ function tick_(now) {
   try { readAreas_(now); } catch (e) { log_('配布エリアの台帳の読み取りの失敗：' + e.message); }
   try { readKeihi_(now); } catch (e) { log_('経費の読み取りの失敗：' + e.message); }
   try { readSales_(now); } catch (e) { log_('売上の数字の読み取りの失敗：' + e.message); }
+  try { staffDigest_(now); } catch (e) { log_('担当者への数字メールの失敗：' + e.message); }
   if (appCfg.notify !== true) return;
   const today = ymdJst_(now), yday = ymdJst_(new Date(now.getTime() - 86400000));
   const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
@@ -461,6 +462,87 @@ function readSales_(now) {
     putDoc('cfg/arearesp', 'respsig', { rows, asof: asOf(rr.at) });
   }
 }
+
+// ---------- 3日に1回、藤原・宇野へ「実績データ」をメール（ポスティング反響台帳が書き出す「担当者の今月の数字（自動）」から） ----------
+const DIGEST = { to: { '藤原': 'fujiwara@aimost.co.jp', '宇野': 'uno@aimost.co.jp' }, every: 3, at: '21:00', from: '20261008', tab: '担当者の今月の数字（自動）', goal: 2500000, workDays: [0, 2, 3, 4, 6] }; // 稼働日＝日・火・水・木・土
+function staffDigest_(now, force) {
+  const hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm'), today = ymdJst_(now);
+  const P = PropertiesService.getScriptProperties(); const last = P.getProperty('digestLast') || '';
+  if (!force && P.getProperty('digestOn') !== '1') return; // 文言の確認が済むまで本番の送信は止めておく
+  if (!force) { if (hhmm < DIGEST.at || today < DIGEST.from) return; /* 毎回21時すぎに送る（10/8から） */ if (last && (dateOf_(today) - dateOf_(last)) / 86400000 < DIGEST.every - 0.5) return; }
+  const sr = sheetRows_(SpreadsheetApp.openById(AREA_SHEET), DIGEST.tab, '担当者'); if (!sr) { log_('担当者の今月の数字のシートが読めませんでした'); return; }
+  const tx = v => String(v == null ? '' : v).replace(/^'/, '');
+  const rows = sr.rows.map(r => ({ n: tx(r[0]), type: tx(r[1]), m: tx(r[2]), face: +r[3] || 0, han: +r[4] || 0, other: +r[5] || 0, app: +r[6] || 0, fc: +r[7] || 0, avg: +r[8] || 0, sched: +r[9] || 0, vSched: +r[10] || 0, openN: +r[11] || 0, vOpen: +r[12] || 0, chase: +r[13] || 0, gSched: +r[15] || 0, gOpen: +r[16] || 0, list: (() => { try { return JSON.parse(tx(r[17]) || '[]'); } catch (e) { return []; } })() }));
+  const ym = (rows[0] && rows[0].m) || Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy-MM'); const Y = +ym.slice(0, 4), M = +ym.slice(5, 7);
+  // 台帳の数字が何日時点か（シート1行目の「最終更新：10/6 23:38」）。古すぎるときは送らずに代表へ知らせる
+  const am = String(sr.at).match(/最終更新：(\d+)\/(\d+)\s*([\d:]*)/); const asD = am ? new Date(Y, +am[1] - 1, +am[2]) : null;
+  const ageDays = asD ? Math.round((dateOf_(today) - asD) / 86400000) : 99;
+  if (!force && ageDays > 1) { if (P.getProperty('digestStale') !== today) { P.setProperty('digestStale', today); MailApp.sendEmail({ to: OWNER_MAIL, subject: '【未送信】実績データのメールを止めました', htmlBody: digestWrap_(`<p>台帳の数字が${am ? am[1] + '/' + am[2] + ' ' + am[3] : '不明な日'}のままで古いため、藤原さん・宇野さんへの実績データのメールを送っていません。</p><p>今日の24時までにポスティング反響台帳を開いて「最新のデータに更新」を押せば、10分ほどで送ります（24時を過ぎたら次の日の21時すぎに送ります）。</p>`), name: '業務管理（AImost）' }); } return; }
+  const asofTxt = am ? `${am[1]}/${am[2]} ${am[3]}` : '';
+  // 稼働日（火・水・木・土・日）：月初から数字の日付まで／月全体
+  const cnt = (d1, d2) => { let n = 0; for (let d = new Date(d1); d <= d2; d.setDate(d.getDate() + 1)) if (DIGEST.workDays.includes(d.getDay())) n++; return n; };
+  const wdEnd = asD && am[3] && +am[3].split(':')[0] < 9 ? new Date(asD.getTime() - 86400000) : asD; // 朝9時前の数字は前日までの稼働日で割る
+  const wdDone = wdEnd ? cnt(new Date(Y, M - 1, 1), wdEnd) : 0, wdAll = cnt(new Date(Y, M - 1, 1), new Date(Y, M, 0));
+  const yen = n => '¥' + Math.round(+n || 0).toLocaleString('ja-JP');
+  const T = rows.reduce((t, r) => { ['face', 'han', 'other', 'app', 'fc', 'sched', 'vSched', 'openN', 'vOpen', 'chase', 'gSched', 'gOpen'].forEach(k => t[k] += r[k]); t.vApp += r.avg * r.app; if (r.type === '業務委託' || r.type === '代理店') t.schedItaku += r.sched; else if (r.n === '不明') t.schedUnk += r.sched; else t.schedOwn += r.sched; return t; },
+    { face: 0, han: 0, other: 0, app: 0, fc: 0, sched: 0, vSched: 0, openN: 0, vOpen: 0, chase: 0, gSched: 0, gOpen: 0, vApp: 0, schedOwn: 0, schedItaku: 0, schedUnk: 0 });
+  const rate = T.vApp ? Math.round(T.fc / T.vApp * 100) : 75;
+  // 工事日を追う案件は、受け取る本人が獲得した案件だけを載せる
+  const S = { th: 'padding:7px 10px;border:1px solid #d5dce6;background:#eef3fa;text-align:left;font-weight:bold;white-space:nowrap;vertical-align:top', td: 'padding:7px 10px;border:1px solid #d5dce6;vertical-align:top', sub: 'color:#5b6675;font-size:12px', h: 'margin:22px 0 6px;padding:6px 12px;color:#fff;border-radius:6px;font-size:15px', sec: 'padding:5px 10px;border:1px solid #d5dce6;background:#f6f7f9;color:#5b6675;font-size:12px;font-weight:bold' };
+  const tr = (k, v, sub) => `<tr><th style="${S.th}">${k}</th><td style="${S.td}">${v}${sub ? `<div style="${S.sub}">${sub}</div>` : ''}</td></tr>`;
+  const sec = t => `<tr><td colspan="2" style="${S.sec}">${t}</td></tr>`;
+  const tbl = inner => `<table style="border-collapse:collapse;width:100%;max-width:640px;margin:4px 0">${inner}</table>`;
+  // 全体：粗利の目標まで
+  const left = Math.max(0, DIGEST.goal - T.gSched), gAvg = T.sched ? T.gSched / T.sched : 0, need = left && gAvg ? Math.ceil(left / gAvg) : 0;
+  const goalTxt = left ? `目標 ${yen(DIGEST.goal)} まで <b style="color:#b42828">あと ${yen(left)}</b> ／ <b style="color:#b42828">あと約${need}件</b>の工事予約が必要` : `目標 ${yen(DIGEST.goal)} を<b style="color:#0b7f3a">超える見込み</b>（${yen(T.gSched - DIGEST.goal)} 上回り）`;
+  const zen = tbl(
+    sec('獲得') +
+    tr('全体の獲得件数', `<b>${T.app}件</b>（対面 ${T.face}・反響 ${T.han}${T.other ? '・その他 ' + T.other : ''}）`) +
+    tr('獲得からの発生売上予測', `<b>${yen(T.fc)}</b>`, `獲得の単価×開通する割合（${rate}％）`) +
+    tr('全体の平均獲得単価', T.app ? `<b>${yen(T.vApp / T.app)}</b>` : '—') +
+    sec('工事') +
+    tr('今月の開通工事予定数', `<b>${T.sched}件</b>（自社の社員 ${T.schedOwn}件・業務委託 ${T.schedItaku}件${T.schedUnk ? '・担当不明 ' + T.schedUnk + '件' : ''}）`) +
+    tr('今月の粗利予測', `<b>${yen(T.gSched)}</b>`, '工事予定の売上から業務委託への支払いを引いた額') +
+    tr('実際に開通した粗利', `<b>${yen(T.gOpen)}</b>（${T.openN}件）`) +
+    tr('粗利の目標まで', goalTxt, left ? `残り ÷ 工事予定1件あたりの平均粗利 ${yen(gAvg)} で計算` : ''));
+  // 工事日を追う案件：1件ずつ枠で表示。本人が動く案件を先に、ソニー待ちは後ろ・灰色
+  const v_ = t => esc_(String(t || '').replace(/\t/g, ' ').trim()) || '<span style="color:#9aa3ae">—</span>';
+  const card = c => { const hd = c.wait ? 'background:#e5e7eb;color:#4b5563' : 'background:#fff4cc;color:#1b2233';
+    const row = (k, v) => `<tr><th style="${S.th};width:9em;font-weight:normal;color:#5b6675">${k}</th><td style="${S.td}">${v}</td></tr>`;
+    return `<table style="border-collapse:collapse;width:100%;max-width:640px;margin:0 0 12px;font-size:13px">
+      <tr><td colspan="2" style="padding:7px 10px;border:1px solid #d5dce6;${hd}"><b>${esc_(c.name)}様</b>　${esc_(c.bld)}${c.room ? ' ' + esc_(c.room) + '号室' : ''}${c.wait ? '　<span style="font-size:12px">（ソニーの準備待ち：今は追わなくてよい）</span>' : ''}</td></tr>
+      ${row('ソニーの状態', v_(c.sony))}${row('申込時の工事希望', v_(c.wish))}${row('こちらでやったこと', v_(c.state === 'まだなし' ? '' : c.state))}${row('メモ', v_(c.memo))}${row('エリア', v_(c.area))}${row('住戸指示日', v_(c.d))}</table>`; };
+  let sent = 0;
+  Object.keys(DIGEST.to).forEach(name => {
+    const r = rows.find(x => x.n === name) || { n: name, face: 0, han: 0, other: 0, app: 0, fc: 0, avg: 0, sched: 0, vSched: 0, openN: 0, vOpen: 0, chase: 0, list: [] };
+    const mineAct = r.list.filter(c => !c.wait).length, mineWait = r.list.length - mineAct;
+    const kojin = tbl(
+      tr('① 今月の獲得', `対面 ${r.face}件 ／ 反響 ${r.han}件${r.other ? ' ／ その他 ' + r.other + '件' : ''} ／ <b>合計 ${r.app}件</b>`) +
+      tr('② 今月の発生売上', `<b>${yen(r.fc)}</b>`, `獲得の単価×開通する割合（${rate}％）`) +
+      tr('平均獲得単価', r.app ? yen(r.avg) : '—') +
+      tr('1日売上', wdDone ? `<b>${yen(r.fc / wdDone)}</b>` : '—', `発生売上 ÷ 稼働日 ${wdDone}日（火・水・木・土・日で数えて、今月は全${wdAll}日）`) +
+      tr('③ 今月の工事予定数', `<b>${r.sched}件</b>`) +
+      tr('④ 今月の開通売上見込み', `<b>${yen(r.vSched)}</b>`) +
+      tr('⑤ 今月の開通売上', `<b>${yen(r.vOpen)}</b>（${r.openN}件）`) +
+      tr('工事日を追う案件', `<b style="color:${mineAct ? '#b42828' : '#0b7f3a'}">${mineAct}件</b>${mineWait ? `（ほかにソニー待ち ${mineWait}件）` : ''}`, r.list.length ? '下に1件ずつ載せています' : ''));
+    const html = `<p>${name}さん、お疲れさまです。${M}月の実績データです${asofTxt ? `（${asofTxt} 時点）` : ''}。</p>
+      <div style="${S.h};background:#1d5fae">【個人データ】${name}さん</div>${kojin}
+      <div style="${S.h};background:#2f3b4c">【全体データ】</div>${zen}
+      <div style="${S.h};background:#b42828">工事日を追う案件（${name}さんの獲得分：${r.list.length}件）</div>
+      ${r.list.length ? [...r.list].sort((a, b) => a.wait - b.wait).map(card).join('') : '<p>工事日を追う案件はありません。</p>'}`;
+    if (MailApp.getRemainingDailyQuota() < 3) return;
+    const dn = Utilities.formatDate(now, 'Asia/Tokyo', 'M月d日');
+    MailApp.sendEmail({ to: DIGEST.to[name], subject: `【確認】${dn}現在の実績データ【${name}】`, htmlBody: digestWrap_(html), name: '業務管理（AImost）' }); sent++;
+  });
+  if (!force) P.setProperty('digestLast', today);
+  log_('担当者への実績データのメールを送りました：' + sent + '通');
+}
+function digestWrap_(html) { return `<div style="font-family:sans-serif;font-size:14px;line-height:1.7;color:#1b2233">${html}<p style="color:#888;font-size:12px;margin-top:18px">このメールは自動で送っています。</p></div>`; }
+/** 試し：代表にだけ、藤原さん分と宇野さん分のメールを送る */
+/** 今すぐ藤原さん・宇野さんに送る（送った日を記録して、次は3日後の21時すぎ） */
+function sendDigestNow() { const now = new Date(); staffDigest_(now, true); PropertiesService.getScriptProperties().setProperty('digestLast', ymdJst_(now)); }
+function digestStart() { PropertiesService.getScriptProperties().setProperty('digestOn', '1'); }
+function testDigest() { const save = DIGEST.to; DIGEST.to = { '藤原': OWNER_MAIL, '宇野': OWNER_MAIL }; try { staffDigest_(new Date(), true); } finally { DIGEST.to = save; } }
 
 // ---------- Googleカレンダー（以前の書き込み。今は使わない） ----------
 function cal_() {
