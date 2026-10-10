@@ -552,9 +552,10 @@ function kadoMail_(now, test) {
   const today = ymdJst_(now), hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
   if (!test && P.getProperty('kadoOn') !== '1') return; /* 文言の確認が済むまで本番の送信は止めておく */
   if (!test) { if (hhmm < KADO.at || P.getProperty('kadoSent') === today) return; P.setProperty('kadoSent', today); }
+  const wd = +Utilities.formatDate(now, 'Asia/Tokyo', 'u'), weekend = wd >= 6; // 土日は登録がなくても3人に送る
   const acts = listDocs_('act').filter(x => x.data.d === today);
-  if (!acts.length) { if (test) log_('本日の稼働データ：今日の登録がありません'); return; }
-  const names = {}; listDocs_('users').forEach(u => { names[u.id] = (u.data.name || '').trim(); });
+  if (!acts.length && !weekend) { if (test) log_('本日の稼働データ：今日の登録がありません'); return; }
+  const names = {}, idOf = {}; listDocs_('users').forEach(u => { const n = (u.data.name || '').trim(); names[u.id] = n; if (n && !idOf[n]) idOf[n] = u.id; });
   const fmt = t => t ? Utilities.formatDate(new Date(t), 'Asia/Tokyo', 'HH:mm') : '—';
   const dur = ms => { const m = Math.round(ms / 60000); return m ? (Math.floor(m / 60) ? Math.floor(m / 60) + '時間' : '') + (m % 60 ? (m % 60) + '分' : '') : '—'; };
   const P_ = {};
@@ -568,29 +569,37 @@ function kadoMail_(now, test) {
   const people = Object.values(P_).filter(p => p.doors).map(p => { const sp = spanOf_(p.ts); const hrs = sp.ms / 3600000;
     return Object.assign(p, { t0: sp.t0, t1: sp.t1, ms: sp.ms, batch: sp.batch, perH: hrs >= 0.25 ? Math.round(p.doors / hrs * 10) / 10 : null }); })
     .sort((a, b) => b.doors - a.doors);
-  if (!people.length) return;
-  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + (p.t0 ? Utilities.formatDate(new Date(p.t0), 'Asia/Tokyo', 'HH:mm') : '—') + '〜' + (p.t1 ? Utilities.formatDate(new Date(p.t1), 'Asia/Tokyo', 'HH:mm') : '—') + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch));
-  const dn = Utilities.formatDate(now, 'Asia/Tokyo', 'M月d日') + '（' + '月火水木金土日'.charAt(+Utilities.formatDate(now, 'Asia/Tokyo', 'u') - 1) + '）';
+  const none = weekend ? KADO.to.filter(n => !people.some(p => p.name === n)) : []; // 土日に登録がなかった人
+  if (!people.length && !none.length) return;
+  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + fmt(p.t0) + '〜' + fmt(p.t1) + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch));
+  const dn = Utilities.formatDate(now, 'Asia/Tokyo', 'M月d日') + '（' + '月火水木金土日'.charAt(wd - 1) + '）';
   const th = 'padding:7px 10px;border:1px solid #d5dce6;background:#eef3fa;text-align:left;white-space:nowrap', td = 'padding:7px 10px;border:1px solid #d5dce6';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
   const note = '<p style="color:#5b6675;font-size:12px">稼働時間は、訪問マップの最初の登録から最後の登録までの時間です（休憩も含みます）。あとからまとめて入力した登録は、時間の計算から外しています。訪問にポスト投函NGは数えていません。</p>';
-  let sent = 0; const send = (to, subject, html) => { if (MailApp.getRemainingDailyQuota() < 3) return; MailApp.sendEmail({ to, subject, htmlBody: digestWrap_(html), name: '業務管理（AImost）' }); sent++; };
+  let sent = 0; const send = (to, subject, html) => { if (!to || MailApp.getRemainingDailyQuota() < 3) return; MailApp.sendEmail({ to, subject, htmlBody: digestWrap_(html), name: '業務管理（AImost）' }); sent++; };
+  const row = (k, v) => `<tr><th style="${th}">${k}</th><td style="${td}">${v}</td></tr>`;
   // 本人あて
   people.forEach(p => {
     if (!KADO.to.includes(p.name) || !/@/.test(p.u)) return;
-    const row = (k, v) => `<tr><th style="${th}">${k}</th><td style="${td}">${v}</td></tr>`;
     const html = `<p>${p.name}さん、お疲れさまです。本日の稼働データです。</p>
       <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', `<b>${fmt(p.t0)}</b>`)}${row('稼働終了', `<b>${fmt(p.t1)}</b>`)}${row('稼働時間', `<b>${dur(p.ms)}</b>`)}${row('訪問', `<b>${p.doors}件</b>`)}${row('対面', `<b>${p.face}件</b>（対面率 ${pct(p.face, p.doors)}）`)}${row('獲得', `<b>${p.got}件</b>`)}${row('1時間あたりの訪問', `<b>${p.perH != null ? p.perH + '件' : '—'}</b>`)}</table>
       ${p.batch ? `<p style="font-size:13px">あとからまとめて入力した登録：${p.batch}件</p>` : ''}${note}`;
     send(test ? OWNER_MAIL : p.u, `【本日の稼働データ】${dn}${p.name}さん`, html);
+  });
+  none.forEach(n => {
+    const html = `<p>${n}さん、お疲れさまです。<b>本日の活動データはありませんでした。</b></p>
+      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', '—')}${row('稼働終了', '—')}${row('稼働時間', '—')}${row('訪問', '0件')}${row('対面', '0件')}${row('獲得', '0件')}${row('1時間あたりの訪問', '—')}</table>
+      <p style="color:#5b6675;font-size:12px">訪問マップに今日の登録がありませんでした。登録し忘れがあれば、訪問マップに入れておいてください。</p>`;
+    send(test ? OWNER_MAIL : idOf[n], `【本日の稼働データ】${dn}${n}さん`, html);
   });
   // 代表あて：全員分
   const T = people.reduce((t, p) => { t.doors += p.doors; t.face += p.face; t.got += p.got; t.ms += p.ms; return t; }, { doors: 0, face: 0, got: 0, ms: 0 });
   const tHrs = T.ms / 3600000;
   const head = ['担当', '稼働開始', '稼働終了', '稼働時間', '訪問', '対面', '獲得', '1時間あたりの訪問'].map(h => `<th style="${th}">${h}</th>`).join('');
   const line = p => `<tr><td style="${td}"><b>${esc_(p.name)}</b></td><td style="${td}">${fmt(p.t0)}</td><td style="${td}">${fmt(p.t1)}</td><td style="${td}">${dur(p.ms)}</td><td style="${td};text-align:right">${p.doors}</td><td style="${td};text-align:right">${p.face}<span style="color:#5b6675;font-size:12px">（${pct(p.face, p.doors)}）</span></td><td style="${td};text-align:right"><b>${p.got}</b></td><td style="${td};text-align:right">${p.perH != null ? p.perH : '—'}</td></tr>`;
+  const noLine = n => `<tr style="color:#6b7280"><td style="${td}"><b>${esc_(n)}</b></td><td style="${td}" colspan="7">本日の活動データはありませんでした</td></tr>`;
   const total = `<tr style="background:#f6f7f9"><td style="${td}"><b>合計</b></td><td style="${td}"></td><td style="${td}"></td><td style="${td}">${dur(T.ms)}</td><td style="${td};text-align:right"><b>${T.doors}</b></td><td style="${td};text-align:right"><b>${T.face}</b><span style="color:#5b6675;font-size:12px">（${pct(T.face, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.got}</b></td><td style="${td};text-align:right">${tHrs >= 0.25 ? Math.round(T.doors / tHrs * 10) / 10 : '—'}</td></tr>`;
-  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:820px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${total}</table>${note}`);
+  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:820px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${none.map(noLine).join('')}${people.length ? total : ''}</table>${note}`);
   log_('本日の稼働データのメールを送りました：' + sent + '通' + (test ? '（試し）' : ''));
 }
 /** 試し：今日の登録で、本人分も全員分も代表にだけ送る */
