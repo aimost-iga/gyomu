@@ -547,6 +547,26 @@ function testDigest() { const save = DIGEST.to; DIGEST.to = { '藤原': OWNER_MA
 
 // ---------- 訪問マップに登録があった日の夜20:30すぎに「本日の稼働データ」をメール（本人：藤原・宇野・大塚／代表：全員分） ----------
 const KADO = { at: '20:30', to: ['藤原', '宇野', '大塚'] };
+/** 今月の獲得数（申込フォームの「後確必要/申込前」と「WEB申込」を担当者ごとに数える。同じ人の同じ申込の重複は1件） */
+function monthAcq_(now) {
+  const ym = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMM'); const ss = SpreadsheetApp.openById(AREA_SHEET); const cnt = {}, seen = {};
+  const ymOf = v => { if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Tokyo', 'yyyyMM'); const m = String(v || '').match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/); return m ? m[1] + ('0' + m[2]).slice(-2) : ''; };
+  [['後確必要/申込前', ['担当者'], ['申込日', 'タイムスタンプ']], ['WEB申込', ['担当者名'], ['申込日', 'タイムスタンプ']]].forEach(([tab, sk, dk]) => {
+    const sh = ss.getSheetByName(tab); if (!sh || sh.getLastRow() < 2) return;
+    const v = sh.getDataRange().getValues(); const h = v[0].map(x => String(x).trim());
+    const si = h.findIndex(x => sk.includes(x)), di = dk.map(k => h.indexOf(k)).filter(i => i >= 0), ki = h.findIndex(x => /カナ|カタカナ/.test(x)), ti = h.findIndex(x => /携帯|電話番号/.test(x));
+    if (si < 0 || !di.length) return;
+    v.slice(1).forEach(r => { const st = String(r[si] || '').trim(); if (!st) return; const d = di.map(i => ymOf(r[i])).find(Boolean); if (d !== ym) return;
+      const key = st + '|' + String(ki >= 0 ? r[ki] : '').replace(/\s/g, '') + '|' + String(ti >= 0 ? r[ti] : '').replace(/\D/g, ''); if (seen[key]) return; seen[key] = 1; cnt[st] = (cnt[st] || 0) + 1; });
+  });
+  return cnt;
+}
+/** 担当者ごとの今月の平均獲得単価と、開通する割合（ポスティング反響台帳が書き出す「担当者の今月の数字（自動）」から） */
+function avgPrice_() {
+  const sr = sheetRows_(SpreadsheetApp.openById(AREA_SHEET), '担当者の今月の数字（自動）', '担当者'); const avg = {}; let fc = 0, base = 0, sum = 0, n = 0;
+  (sr ? sr.rows : []).forEach(r => { const name = String(r[0]).replace(/^'/, ''), app = +r[6] || 0, a = +r[8] || 0; if (app && a) { avg[name] = a; sum += a * app; n += app; fc += +r[7] || 0; base += a * app; } });
+  return { avg, team: n ? sum / n : 0, rate: base ? fc / base : 0.75 };
+}
 function kadoMail_(now, test) {
   const P = PropertiesService.getScriptProperties();
   const today = ymdJst_(now), hhmm = Utilities.formatDate(now, 'Asia/Tokyo', 'HH:mm');
@@ -574,11 +594,14 @@ function kadoMail_(now, test) {
     .sort((a, b) => b.doors - a.doors);
   const none = weekend ? KADO.to.filter(n => !people.some(p => p.name === n)) : []; // 土日に登録がなかった人
   if (!people.length && !none.length) return;
-  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + fmt(p.t0) + '〜' + fmt(p.t1) + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 対応' + p.taio + ' IHNG' + p.ihng + ' 対面NG' + p.fng + ' 再訪' + p.again + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch));
+  let macq = {}, AP = { avg: {}, team: 0, rate: 0.75 }; try { macq = monthAcq_(now); } catch (e) { log_('今月の獲得数を読めませんでした：' + e.message); } try { AP = avgPrice_(); } catch (e) { log_('平均獲得単価を読めませんでした：' + e.message); }
+  const yen = n => '¥' + Math.round(+n || 0).toLocaleString('ja-JP');
+  people.forEach(p => { const a = AP.avg[p.name] || AP.team; p.sales = p.got * a * AP.rate; p.macq = macq[p.name] || 0; });
+  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + fmt(p.t0) + '〜' + fmt(p.t1) + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 対応' + p.taio + ' IHNG' + p.ihng + ' 対面NG' + p.fng + ' 再訪' + p.again + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch + ' 売上' + Math.round(p.sales) + ' 今月の獲得' + p.macq)); if (test) log_('試し：今月の獲得 ' + JSON.stringify(macq) + ' 開通する割合 ' + AP.rate);
   const dn = Utilities.formatDate(now, 'Asia/Tokyo', 'M月d日') + '（' + '月火水木金土日'.charAt(wd - 1) + '）';
   const th = 'padding:7px 10px;border:1px solid #d5dce6;background:#eef3fa;text-align:left;white-space:nowrap', td = 'padding:7px 10px;border:1px solid #d5dce6';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
-  const note = '<p style="color:#5b6675;font-size:12px">稼働時間は、訪問マップの最初の登録から最後の登録までの時間です（休憩も含みます）。あとからまとめて入力した登録は、時間の計算から外しています。訪問にポスト投函NGは数えていません。対応＝インターホンNG・対面NG・再訪・獲得の合計です。</p>';
+  const note = '<p style="color:#5b6675;font-size:12px">稼働時間は、訪問マップの最初の登録から最後の登録までの時間です（休憩も含みます）。あとからまとめて入力した登録は、時間の計算から外しています。訪問にポスト投函NGは数えていません。対応＝インターホンNG・対面NG・再訪・獲得の合計。対応率＝対応÷訪問、対面率＝対面÷対応、獲得率＝獲得÷対面。本日の売上＝本日の獲得×その人の今月の平均獲得単価×開通する割合（' + Math.round(AP.rate * 100) + '％）の見込み。今月の獲得（合計）は申込フォームの今月の件数（反響・WEBも含む）です。</p>';
   let sent = 0; const send = (to, subject, html) => { if (!to || MailApp.getRemainingDailyQuota() < 3) return; MailApp.sendEmail({ to, subject, htmlBody: digestWrap_(html), name: '業務管理（AImost）' }); sent++; };
   const row = (k, v) => `<tr><th style="${th}">${k}</th><td style="${td}">${v}</td></tr>`;
   const list = o => { const ks = Object.keys(o).sort((a, b) => o[b] - o[a]); return ks.length ? ks.map(k => `${esc_(k)} ${o[k]}`).join('・') : ''; };
@@ -592,24 +615,25 @@ function kadoMail_(now, test) {
   people.forEach(p => {
     if (!KADO.to.includes(p.name) || !/@/.test(p.u)) return;
     const html = `<p>${p.name}さん、お疲れさまです。本日の稼働データです。</p>
-      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', `<b>${fmt(p.t0)}</b>`)}${row('稼働終了', `<b>${fmt(p.t1)}</b>`)}${row('稼働時間', `<b>${dur(p.ms)}</b>`)}${row('訪問', `<b>${p.doors}件</b>`)}${row('対応', `<b>${p.taio}件</b>（対応率 ${pct(p.taio, p.doors)}）`)}${row('対面', `<b>${p.face}件</b>（対面率 ${pct(p.face, p.doors)}）`)}${row('獲得', `<b>${p.got}件</b>`)}${row('1時間あたりの訪問', `<b>${p.perH != null ? p.perH + '件' : '—'}</b>`)}</table>
+      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', `<b>${fmt(p.t0)}</b>`)}${row('稼働終了', `<b>${fmt(p.t1)}</b>`)}${row('稼働時間', `<b>${dur(p.ms)}</b>`)}${row('訪問', `<b>${p.doors}件</b>`)}${row('対応', `<b>${p.taio}件</b>（対応率 ${pct(p.taio, p.doors)}）`)}${row('対面', `<b>${p.face}件</b>（対面率 ${pct(p.face, p.taio)}）`)}${row('獲得', `<b>${p.got}件</b>（獲得率 ${pct(p.got, p.face)}）`)}${row('1時間あたりの訪問', `<b>${p.perH != null ? p.perH + '件' : '—'}</b>`)}${row('本日の売上', `<b>${yen(p.sales)}</b>`)}${row('今月の獲得（合計）', `<b>${p.macq}件</b>`)}</table>
       ${ngTable(p)}${p.batch ? `<p style="font-size:13px">あとからまとめて入力した登録：${p.batch}件</p>` : ''}${note}`;
     send(test ? OWNER_MAIL : p.u, `【本日の稼働データ】${dn}${p.name}さん`, html);
   });
   none.forEach(n => {
     const html = `<p>${n}さん、お疲れさまです。<b>本日の活動データはありませんでした。</b></p>
-      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', '—')}${row('稼働終了', '—')}${row('稼働時間', '—')}${row('訪問', '0件')}${row('対応', '0件')}${row('対面', '0件')}${row('獲得', '0件')}${row('1時間あたりの訪問', '—')}</table>
+      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', '—')}${row('稼働終了', '—')}${row('稼働時間', '—')}${row('訪問', '0件')}${row('対応', '0件')}${row('対面', '0件')}${row('獲得', '0件')}${row('1時間あたりの訪問', '—')}${row('本日の売上', '¥0')}${row('今月の獲得（合計）', `<b>${macq[n] || 0}件</b>`)}</table>
       <p style="color:#5b6675;font-size:12px">訪問マップに今日の登録がありませんでした。登録し忘れがあれば、訪問マップに入れておいてください。</p>`;
     send(test ? OWNER_MAIL : idOf[n], `【本日の稼働データ】${dn}${n}さん`, html);
   });
   // 代表あて：全員分
-  const T = people.reduce((t, p) => { t.doors += p.doors; t.taio += p.taio; t.face += p.face; t.got += p.got; t.ms += p.ms; return t; }, { doors: 0, taio: 0, face: 0, got: 0, ms: 0 });
+  const T = people.reduce((t, p) => { t.doors += p.doors; t.taio += p.taio; t.face += p.face; t.got += p.got; t.ms += p.ms; t.sales += p.sales; t.macq += p.macq; return t; }, { doors: 0, taio: 0, face: 0, got: 0, ms: 0, sales: 0, macq: 0 });
+  none.forEach(n => { T.macq += macq[n] || 0; });
   const tHrs = T.ms / 3600000;
-  const head = ['担当', '稼働開始', '稼働終了', '稼働時間', '訪問', '対応', '対面', '獲得', '1時間あたりの訪問'].map(h => `<th style="${th}">${h}</th>`).join('');
-  const line = p => `<tr><td style="${td}"><b>${esc_(p.name)}</b></td><td style="${td}">${fmt(p.t0)}</td><td style="${td}">${fmt(p.t1)}</td><td style="${td}">${dur(p.ms)}</td><td style="${td};text-align:right">${p.doors}</td><td style="${td};text-align:right">${p.taio}<span style="color:#5b6675;font-size:12px">（${pct(p.taio, p.doors)}）</span></td><td style="${td};text-align:right">${p.face}<span style="color:#5b6675;font-size:12px">（${pct(p.face, p.doors)}）</span></td><td style="${td};text-align:right"><b>${p.got}</b></td><td style="${td};text-align:right">${p.perH != null ? p.perH : '—'}</td></tr>`;
-  const noLine = n => `<tr style="color:#6b7280"><td style="${td}"><b>${esc_(n)}</b></td><td style="${td}" colspan="8">本日の活動データはありませんでした</td></tr>`;
-  const total = `<tr style="background:#f6f7f9"><td style="${td}"><b>合計</b></td><td style="${td}"></td><td style="${td}"></td><td style="${td}">${dur(T.ms)}</td><td style="${td};text-align:right"><b>${T.doors}</b></td><td style="${td};text-align:right"><b>${T.taio}</b><span style="color:#5b6675;font-size:12px">（${pct(T.taio, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.face}</b><span style="color:#5b6675;font-size:12px">（${pct(T.face, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.got}</b></td><td style="${td};text-align:right">${tHrs >= 0.25 ? Math.round(T.doors / tHrs * 10) / 10 : '—'}</td></tr>`;
-  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:820px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${none.map(noLine).join('')}${people.length ? total : ''}</table>${people.map(p => `<p style="margin:16px 0 4px"><b>${esc_(p.name)}さんのNGの内訳</b></p>${ngTable(p).replace('<p style="margin:14px 0 4px"><b>NGの内訳</b></p>', '')}`).join('')}${note}`);
+  const head = ['担当', '稼働開始', '稼働終了', '稼働時間', '訪問', '対応', '対面', '獲得', '1時間あたりの訪問', '本日の売上', '今月の獲得'].map(h => `<th style="${th}">${h}</th>`).join('');
+  const line = p => `<tr><td style="${td}"><b>${esc_(p.name)}</b></td><td style="${td}">${fmt(p.t0)}</td><td style="${td}">${fmt(p.t1)}</td><td style="${td}">${dur(p.ms)}</td><td style="${td};text-align:right">${p.doors}</td><td style="${td};text-align:right">${p.taio}<span style="color:#5b6675;font-size:12px">（${pct(p.taio, p.doors)}）</span></td><td style="${td};text-align:right">${p.face}<span style="color:#5b6675;font-size:12px">（${pct(p.face, p.taio)}）</span></td><td style="${td};text-align:right"><b>${p.got}</b><span style="color:#5b6675;font-size:12px">（${pct(p.got, p.face)}）</span></td><td style="${td};text-align:right">${p.perH != null ? p.perH : '—'}</td><td style="${td};text-align:right">${yen(p.sales)}</td><td style="${td};text-align:right">${p.macq}</td></tr>`;
+  const noLine = n => `<tr style="color:#6b7280"><td style="${td}"><b>${esc_(n)}</b></td><td style="${td}" colspan="9">本日の活動データはありませんでした</td><td style="${td};text-align:right">${macq[n] || 0}</td></tr>`;
+  const total = `<tr style="background:#f6f7f9"><td style="${td}"><b>合計</b></td><td style="${td}"></td><td style="${td}"></td><td style="${td}">${dur(T.ms)}</td><td style="${td};text-align:right"><b>${T.doors}</b></td><td style="${td};text-align:right"><b>${T.taio}</b><span style="color:#5b6675;font-size:12px">（${pct(T.taio, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.face}</b><span style="color:#5b6675;font-size:12px">（${pct(T.face, T.taio)}）</span></td><td style="${td};text-align:right"><b>${T.got}</b><span style="color:#5b6675;font-size:12px">（${pct(T.got, T.face)}）</span></td><td style="${td};text-align:right">${tHrs >= 0.25 ? Math.round(T.doors / tHrs * 10) / 10 : '—'}</td><td style="${td};text-align:right"><b>${yen(T.sales)}</b></td><td style="${td};text-align:right"><b>${T.macq}</b></td></tr>`;
+  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:980px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${none.map(noLine).join('')}${people.length || none.length ? total : ''}</table>${people.map(p => `<p style="margin:16px 0 4px"><b>${esc_(p.name)}さんのNGの内訳</b></p>${ngTable(p).replace('<p style="margin:14px 0 4px"><b>NGの内訳</b></p>', '')}`).join('')}${note}`);
   log_('本日の稼働データのメールを送りました：' + sent + '通' + (test ? '（試し）' : ''));
 }
 /** 試し：今日の登録で、本人分も全員分も代表にだけ送る */
