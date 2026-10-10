@@ -560,46 +560,56 @@ function kadoMail_(now, test) {
   const dur = ms => { const m = Math.round(ms / 60000); return m ? (Math.floor(m / 60) ? Math.floor(m / 60) + '時間' : '') + (m % 60 ? (m % 60) + '分' : '') : '—'; };
   const P_ = {};
   acts.forEach(a => {
-    const u = a.data.u || ''; const p = P_[u] || (P_[u] = { u, name: names[u] || u, doors: 0, face: 0, got: 0, ts: [] });
+    const u = a.data.u || ''; const p = P_[u] || (P_[u] = { u, name: names[u] || u, doors: 0, face: 0, got: 0, ihng: 0, fng: 0, again: 0, why: { ihng: {}, fng: {} }, st: {}, ts: [] });
     for (const k in a.data) { const e = a.data[k];
       if (!e || typeof e !== 'object' || e.x || !e.bid || !RES[e.r] || e.r === 'png') continue; // ポスト投函NGは訪問に数えない
       p.doors++; if (e.r === 'fng' || e.r === 'again' || e.r === 'got') p.face++; if (e.r === 'got') p.got++;
+      if (e.r === 'ihng' || e.r === 'fng' || e.r === 'again') p[e.r]++;
+      if (e.r === 'ihng' || e.r === 'fng') { const w = String(e.why || '').trim() || '理由の記入なし'; p.why[e.r][w] = (p.why[e.r][w] || 0) + 1; }
+      if (e.r === 'fng') { const st = String(e.st || '').trim() || '段階の記入なし'; p.st[st] = (p.st[st] || 0) + 1; }
       if (e.t) p.ts.push({ t: Number(e.t), b: e.bid }); }
   });
   const people = Object.values(P_).filter(p => p.doors).map(p => { const sp = spanOf_(p.ts); const hrs = sp.ms / 3600000;
-    return Object.assign(p, { t0: sp.t0, t1: sp.t1, ms: sp.ms, batch: sp.batch, perH: hrs >= 0.25 ? Math.round(p.doors / hrs * 10) / 10 : null }); })
+    return Object.assign(p, { taio: p.ihng + p.fng + p.again + p.got, t0: sp.t0, t1: sp.t1, ms: sp.ms, batch: sp.batch, perH: hrs >= 0.25 ? Math.round(p.doors / hrs * 10) / 10 : null }); })
     .sort((a, b) => b.doors - a.doors);
   const none = weekend ? KADO.to.filter(n => !people.some(p => p.name === n)) : []; // 土日に登録がなかった人
   if (!people.length && !none.length) return;
-  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + fmt(p.t0) + '〜' + fmt(p.t1) + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch));
+  if (test) people.forEach(p => log_('試し：' + p.name + ' ' + fmt(p.t0) + '〜' + fmt(p.t1) + ' ' + Math.round(p.ms / 60000) + '分 訪問' + p.doors + ' 対面' + p.face + ' 対応' + p.taio + ' IHNG' + p.ihng + ' 対面NG' + p.fng + ' 再訪' + p.again + ' 獲得' + p.got + ' 1h' + p.perH + ' まとめ' + p.batch));
   const dn = Utilities.formatDate(now, 'Asia/Tokyo', 'M月d日') + '（' + '月火水木金土日'.charAt(wd - 1) + '）';
   const th = 'padding:7px 10px;border:1px solid #d5dce6;background:#eef3fa;text-align:left;white-space:nowrap', td = 'padding:7px 10px;border:1px solid #d5dce6';
   const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
-  const note = '<p style="color:#5b6675;font-size:12px">稼働時間は、訪問マップの最初の登録から最後の登録までの時間です（休憩も含みます）。あとからまとめて入力した登録は、時間の計算から外しています。訪問にポスト投函NGは数えていません。</p>';
+  const note = '<p style="color:#5b6675;font-size:12px">稼働時間は、訪問マップの最初の登録から最後の登録までの時間です（休憩も含みます）。あとからまとめて入力した登録は、時間の計算から外しています。訪問にポスト投函NGは数えていません。対応＝インターホンNG・対面NG・再訪・獲得の合計です。</p>';
   let sent = 0; const send = (to, subject, html) => { if (!to || MailApp.getRemainingDailyQuota() < 3) return; MailApp.sendEmail({ to, subject, htmlBody: digestWrap_(html), name: '業務管理（AImost）' }); sent++; };
   const row = (k, v) => `<tr><th style="${th}">${k}</th><td style="${td}">${v}</td></tr>`;
+  const list = o => { const ks = Object.keys(o).sort((a, b) => o[b] - o[a]); return ks.length ? ks.map(k => `${esc_(k)} ${o[k]}`).join('・') : ''; };
+  const stOrder = ['冒頭NG', 'フルトーク前NG', 'フルトークNG'];
+  const stList = o => { const ks = Object.keys(o).sort((a, b) => (stOrder.indexOf(a) + 1 || 9) - (stOrder.indexOf(b) + 1 || 9)); return ks.map(k => `${esc_(k)} ${o[k]}`).join('・'); };
+  const ngTable = p => `<p style="margin:14px 0 4px"><b>NGの内訳</b></p><table style="border-collapse:collapse;width:100%;max-width:520px;font-size:13px">
+      ${row('インターホンNG', `<b>${p.ihng}件</b>${p.ihng ? `<div style="color:#5b6675;font-size:12px">理由：${list(p.why.ihng)}</div>` : ''}`)}
+      ${row('対面NG', `<b>${p.fng}件</b>${p.fng ? `<div style="color:#5b6675;font-size:12px">段階：${stList(p.st)}<br>理由：${list(p.why.fng)}</div>` : ''}`)}
+      ${row('再訪', `<b>${p.again}件</b>`)}</table>`;
   // 本人あて
   people.forEach(p => {
     if (!KADO.to.includes(p.name) || !/@/.test(p.u)) return;
     const html = `<p>${p.name}さん、お疲れさまです。本日の稼働データです。</p>
-      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', `<b>${fmt(p.t0)}</b>`)}${row('稼働終了', `<b>${fmt(p.t1)}</b>`)}${row('稼働時間', `<b>${dur(p.ms)}</b>`)}${row('訪問', `<b>${p.doors}件</b>`)}${row('対面', `<b>${p.face}件</b>（対面率 ${pct(p.face, p.doors)}）`)}${row('獲得', `<b>${p.got}件</b>`)}${row('1時間あたりの訪問', `<b>${p.perH != null ? p.perH + '件' : '—'}</b>`)}</table>
-      ${p.batch ? `<p style="font-size:13px">あとからまとめて入力した登録：${p.batch}件</p>` : ''}${note}`;
+      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', `<b>${fmt(p.t0)}</b>`)}${row('稼働終了', `<b>${fmt(p.t1)}</b>`)}${row('稼働時間', `<b>${dur(p.ms)}</b>`)}${row('訪問', `<b>${p.doors}件</b>`)}${row('対応', `<b>${p.taio}件</b>（対応率 ${pct(p.taio, p.doors)}）`)}${row('対面', `<b>${p.face}件</b>（対面率 ${pct(p.face, p.doors)}）`)}${row('獲得', `<b>${p.got}件</b>`)}${row('1時間あたりの訪問', `<b>${p.perH != null ? p.perH + '件' : '—'}</b>`)}</table>
+      ${ngTable(p)}${p.batch ? `<p style="font-size:13px">あとからまとめて入力した登録：${p.batch}件</p>` : ''}${note}`;
     send(test ? OWNER_MAIL : p.u, `【本日の稼働データ】${dn}${p.name}さん`, html);
   });
   none.forEach(n => {
     const html = `<p>${n}さん、お疲れさまです。<b>本日の活動データはありませんでした。</b></p>
-      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', '—')}${row('稼働終了', '—')}${row('稼働時間', '—')}${row('訪問', '0件')}${row('対面', '0件')}${row('獲得', '0件')}${row('1時間あたりの訪問', '—')}</table>
+      <table style="border-collapse:collapse;width:100%;max-width:520px">${row('稼働開始', '—')}${row('稼働終了', '—')}${row('稼働時間', '—')}${row('訪問', '0件')}${row('対応', '0件')}${row('対面', '0件')}${row('獲得', '0件')}${row('1時間あたりの訪問', '—')}</table>
       <p style="color:#5b6675;font-size:12px">訪問マップに今日の登録がありませんでした。登録し忘れがあれば、訪問マップに入れておいてください。</p>`;
     send(test ? OWNER_MAIL : idOf[n], `【本日の稼働データ】${dn}${n}さん`, html);
   });
   // 代表あて：全員分
-  const T = people.reduce((t, p) => { t.doors += p.doors; t.face += p.face; t.got += p.got; t.ms += p.ms; return t; }, { doors: 0, face: 0, got: 0, ms: 0 });
+  const T = people.reduce((t, p) => { t.doors += p.doors; t.taio += p.taio; t.face += p.face; t.got += p.got; t.ms += p.ms; return t; }, { doors: 0, taio: 0, face: 0, got: 0, ms: 0 });
   const tHrs = T.ms / 3600000;
-  const head = ['担当', '稼働開始', '稼働終了', '稼働時間', '訪問', '対面', '獲得', '1時間あたりの訪問'].map(h => `<th style="${th}">${h}</th>`).join('');
-  const line = p => `<tr><td style="${td}"><b>${esc_(p.name)}</b></td><td style="${td}">${fmt(p.t0)}</td><td style="${td}">${fmt(p.t1)}</td><td style="${td}">${dur(p.ms)}</td><td style="${td};text-align:right">${p.doors}</td><td style="${td};text-align:right">${p.face}<span style="color:#5b6675;font-size:12px">（${pct(p.face, p.doors)}）</span></td><td style="${td};text-align:right"><b>${p.got}</b></td><td style="${td};text-align:right">${p.perH != null ? p.perH : '—'}</td></tr>`;
-  const noLine = n => `<tr style="color:#6b7280"><td style="${td}"><b>${esc_(n)}</b></td><td style="${td}" colspan="7">本日の活動データはありませんでした</td></tr>`;
-  const total = `<tr style="background:#f6f7f9"><td style="${td}"><b>合計</b></td><td style="${td}"></td><td style="${td}"></td><td style="${td}">${dur(T.ms)}</td><td style="${td};text-align:right"><b>${T.doors}</b></td><td style="${td};text-align:right"><b>${T.face}</b><span style="color:#5b6675;font-size:12px">（${pct(T.face, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.got}</b></td><td style="${td};text-align:right">${tHrs >= 0.25 ? Math.round(T.doors / tHrs * 10) / 10 : '—'}</td></tr>`;
-  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:820px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${none.map(noLine).join('')}${people.length ? total : ''}</table>${note}`);
+  const head = ['担当', '稼働開始', '稼働終了', '稼働時間', '訪問', '対応', '対面', '獲得', '1時間あたりの訪問'].map(h => `<th style="${th}">${h}</th>`).join('');
+  const line = p => `<tr><td style="${td}"><b>${esc_(p.name)}</b></td><td style="${td}">${fmt(p.t0)}</td><td style="${td}">${fmt(p.t1)}</td><td style="${td}">${dur(p.ms)}</td><td style="${td};text-align:right">${p.doors}</td><td style="${td};text-align:right">${p.taio}<span style="color:#5b6675;font-size:12px">（${pct(p.taio, p.doors)}）</span></td><td style="${td};text-align:right">${p.face}<span style="color:#5b6675;font-size:12px">（${pct(p.face, p.doors)}）</span></td><td style="${td};text-align:right"><b>${p.got}</b></td><td style="${td};text-align:right">${p.perH != null ? p.perH : '—'}</td></tr>`;
+  const noLine = n => `<tr style="color:#6b7280"><td style="${td}"><b>${esc_(n)}</b></td><td style="${td}" colspan="8">本日の活動データはありませんでした</td></tr>`;
+  const total = `<tr style="background:#f6f7f9"><td style="${td}"><b>合計</b></td><td style="${td}"></td><td style="${td}"></td><td style="${td}">${dur(T.ms)}</td><td style="${td};text-align:right"><b>${T.doors}</b></td><td style="${td};text-align:right"><b>${T.taio}</b><span style="color:#5b6675;font-size:12px">（${pct(T.taio, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.face}</b><span style="color:#5b6675;font-size:12px">（${pct(T.face, T.doors)}）</span></td><td style="${td};text-align:right"><b>${T.got}</b></td><td style="${td};text-align:right">${tHrs >= 0.25 ? Math.round(T.doors / tHrs * 10) / 10 : '—'}</td></tr>`;
+  send(OWNER_MAIL, `【本日の稼働データ】${dn}全員分`, `<p>本日の稼働データ（全員分）です。</p><table style="border-collapse:collapse;width:100%;max-width:820px;font-size:13px"><tr>${head}</tr>${people.map(line).join('')}${none.map(noLine).join('')}${people.length ? total : ''}</table>${people.map(p => `<p style="margin:16px 0 4px"><b>${esc_(p.name)}さんのNGの内訳</b></p>${ngTable(p).replace('<p style="margin:14px 0 4px"><b>NGの内訳</b></p>', '')}`).join('')}${note}`);
   log_('本日の稼働データのメールを送りました：' + sent + '通' + (test ? '（試し）' : ''));
 }
 /** 試し：今日の登録で、本人分も全員分も代表にだけ送る */
